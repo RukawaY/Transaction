@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func, cast, Date, text
 from datetime import datetime, timezone, time
 from typing import List, Dict, Optional
 from .database import engine, Base, get_db
@@ -40,7 +40,7 @@ Returns:
     """
     try:
         # 执行一个简单的查询来测试连接
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         return {"db_status": "connected"}
     except Exception as e:
         return {"db_status": "error", "detail": str(e)}
