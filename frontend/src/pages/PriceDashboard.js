@@ -76,18 +76,62 @@ function PriceDashboard() {
     };
   };
 
+  // 计算价格范围
+  const calculatePriceRange = (data) => {
+    if (!data) return { min: 0, max: 0 };
+
+    const allPrices = [
+      ...(data.uniswap || []).flatMap(item => [item.open, item.high, item.low, item.close]),
+      ...(data.binance || []).flatMap(item => [item.open, item.high, item.low, item.close])
+    ];
+
+    const min = Math.min(...allPrices);
+    const max = Math.max(...allPrices);
+    
+    // 添加一些边距，让图表更美观
+    const padding = (max - min) * 0.1;
+    return {
+      min: Math.max(0, min - padding),
+      max: max + padding
+    };
+  };
+
   // 生成图表点数据
-  const generateChartPoints = (data, isUniswap = true) => {
-    if (!data) return [];
+  const generateChartPoints = (data, isUniswap = true, priceRange) => {
+    if (!data || !priceRange) return [];
 
     const dataset = isUniswap ? data.uniswap : data.binance;
-    if (!dataset) return [];
+    if (!dataset || dataset.length === 0) return [];
+
+    const { min, max } = priceRange;
+    const range = max - min;
+    const chartHeight = 250; // SVG 图表高度
+    const chartTop = 25; // 顶部边距
 
     return dataset.map((item, index) => ({
       x: (index / (dataset.length - 1)) * 750 + 25, // 在SVG坐标系中的x位置
-      y: 300 - ((item.close - 2400) / 200) * 250, // 在SVG坐标系中的y位置
+      y: chartTop + chartHeight - ((item.close - min) / range) * chartHeight, // 动态计算Y位置
       price: item.close.toFixed(2),
     }));
+  };
+
+  // 生成Y轴刻度
+  const generateYTicks = (priceRange) => {
+    if (!priceRange || priceRange.min === priceRange.max) {
+      return [2600, 2550, 2500, 2450, 2400]; // 默认值
+    }
+
+    const { min, max } = priceRange;
+    const range = max - min;
+    const step = range / 4; // 5个刻度点（包括最小和最大）
+    
+    return [
+      Math.ceil(max),
+      Math.ceil(max - step),
+      Math.ceil(max - step * 2),
+      Math.ceil(max - step * 3),
+      Math.floor(min)
+    ].reverse();
   };
 
   const renderChart = () => {
@@ -103,8 +147,10 @@ function PriceDashboard() {
       return <div className="chart-placeholder">无数据</div>;
     }
 
-    const uniswapPoints = generateChartPoints(priceData, true);
-    const binancePoints = generateChartPoints(priceData, false);
+    const priceRange = calculatePriceRange(priceData);
+    const uniswapPoints = generateChartPoints(priceData, true, priceRange);
+    const binancePoints = generateChartPoints(priceData, false, priceRange);
+    const yTicks = generateYTicks(priceRange);
 
     return (
       <div className="chart-container">
@@ -124,9 +170,9 @@ function PriceDashboard() {
           </div>
           <div className="chart-area">
             <div className="y-axis">
-              {[2600, 2550, 2500, 2450, 2400].map((price) => (
-                <div key={price} className="y-tick">
-                  {price}
+              {yTicks.map((price, index) => (
+                <div key={`${price}-${index}`} className="y-tick">
+                  {price.toLocaleString()}
                 </div>
               ))}
             </div>
