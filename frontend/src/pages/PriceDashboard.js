@@ -2,41 +2,12 @@ import React, { useEffect, useState } from "react";
 import "./PriceDashboard.css";
 
 function PriceDashboard() {
-  const [scrolled, setScrolled] = useState(false);
   const [priceData, setPriceData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [chartView, setChartView] = useState("both"); // 'both', 'uniswap', 'binance'
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-
-        // 检查是否应该使用后端API
-        const useBackend = process.env.REACT_APP_USE_BACKEND === "true";
-
-        if (useBackend) {
-          // 从后端获取数据
-          const response = await fetch("/api/price-data");
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
-          const data = await response.json();
-          setPriceData(data);
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-
-          // Mock数据 - 模拟2025年9月1日至9月30日的数据
-          const mockData = generateMockData();
-          setPriceData(mockData);
-        }
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchData();
   }, []);
 
@@ -76,24 +47,33 @@ function PriceDashboard() {
     };
   };
 
-  // 计算价格范围
-  const calculatePriceRange = (data) => {
-    if (!data) return { min: 0, max: 0 };
+  // 修改：添加一个函数来获取数据（支持mock或后端）
+  const fetchData = async () => {
+    try {
+      setLoading(true);
 
-    const allPrices = [
-      ...(data.uniswap || []).flatMap(item => [item.open, item.high, item.low, item.close]),
-      ...(data.binance || []).flatMap(item => [item.open, item.high, item.low, item.close])
-    ];
+      // 检查是否应该使用后端API
+      const useBackend = process.env.REACT_APP_USE_BACKEND === "true";
 
-    const min = Math.min(...allPrices);
-    const max = Math.max(...allPrices);
-    
-    // 添加一些边距，让图表更美观
-    const padding = (max - min) * 0.1;
-    return {
-      min: Math.max(0, min - padding),
-      max: max + padding
-    };
+      if (useBackend) {
+        // 从后端获取数据
+        const response = await fetch("/api/price-data");
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        setPriceData(data);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // 使用mock数据
+        const mockData = generateMockData();
+        setPriceData(mockData);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // 生成图表点数据
@@ -110,8 +90,15 @@ function PriceDashboard() {
 
     return dataset.map((item, index) => ({
       x: (index / (dataset.length - 1)) * 750 + 25, // 在SVG坐标系中的x位置
-      y: chartTop + chartHeight - ((item.close - min) / range) * chartHeight, // 动态计算Y位置
-      price: item.close.toFixed(2),
+      yOpen: 300 - ((item.open - 2400) / 200) * 250, // 开盘价在SVG坐标系中的y位置
+      yHigh: 300 - ((item.high - 2400) / 200) * 250, // 最高价在SVG坐标系中的y位置
+      yLow: 300 - ((item.low - 2400) / 200) * 250, // 最低价在SVG坐标系中的y位置
+      yClose: 300 - ((item.close - 2400) / 200) * 250, // 收盘价在SVG坐标系中的y位置
+      open: item.open,
+      high: item.high,
+      low: item.low,
+      close: item.close,
+      isRising: item.close >= item.open, // 判断是否上涨
     }));
   };
 
@@ -136,15 +123,15 @@ function PriceDashboard() {
 
   const renderChart = () => {
     if (loading) {
-      return <div className="chart-placeholder">加载中...</div>;
+        return <div className="chart-placeholder">加载中...</div>;
     }
 
     if (error) {
-      return <div className="chart-placeholder">错误: {error}</div>;
+        return <div className="chart-placeholder">错误: {error}</div>;
     }
 
     if (!priceData) {
-      return <div className="chart-placeholder">无数据</div>;
+        return <div className="chart-placeholder">无数据</div>;
     }
 
     const priceRange = calculatePriceRange(priceData);
@@ -153,97 +140,174 @@ function PriceDashboard() {
     const yTicks = generateYTicks(priceRange);
 
     return (
-      <div className="chart-container">
-        <div className="chart-wrapper">
-          <div className="chart-header">
-            <h3>USDT/ETH 价格对比 (2025年9月)</h3>
-            <div className="legend">
-              <div className="legend-item">
-                <div className="color-box uniswap"></div>
-                <span>Uniswap V3</span>
-              </div>
-              <div className="legend-item">
-                <div className="color-box binance"></div>
-                <span>Binance</span>
-              </div>
-            </div>
-          </div>
-          <div className="chart-area">
-            <div className="y-axis">
-              {yTicks.map((price, index) => (
-                <div key={`${price}-${index}`} className="y-tick">
-                  {price.toLocaleString()}
+        <div className="chart-container">
+            <div className="chart-wrapper">
+                <div className="chart-header">
+                    <h3>USDT/ETH 价格对比 (2025年9月)</h3>
+                    <div className="chart-controls">
+                        {/* 修改: 更新按钮样式并统一高度 */}
+                        <button
+                            className={`chart-button ${chartView === "both" ? "active" : ""}`}
+                            onClick={() => setChartView("both")}
+                            style={{
+                                marginRight: "10px",
+                                padding: "10px 20px",
+                                borderRadius: "4px",
+                                border: "none",
+                                backgroundColor: "#808695", // 修改：设置为灰色
+                                color: "#ffffff",
+                                height: "40px",
+                                fontSize: "14px",
+                                display: "flex", // 新增：使用flex布局
+                                alignItems: "center", // 新增：使文字垂直居中
+                                justifyContent: "center", // 新增：使文字水平居中
+                            }}
+                        >
+                            显示全部
+                        </button>
+                        <button
+                            className={`chart-button ${chartView === "uniswap" ? "active" : ""}`}
+                            onClick={() => setChartView("uniswap")}
+                            style={{
+                                marginRight: "10px",
+                                padding: "10px 20px",
+                                borderRadius: "4px",
+                                border: "none",
+                                backgroundColor: "#6366f1", // 修改：设置为紫色
+                                color: "#ffffff",
+                                height: "40px",
+                                fontSize: "14px",
+                                display: "flex", // 新增：使用flex布局
+                                alignItems: "center", // 新增：使文字垂直居中
+                                justifyContent: "center", // 新增：使文字水平居中
+                            }}
+                        >
+                            Uniswap V3
+                        </button>
+                        <button
+                            className={`chart-button ${chartView === "binance" ? "active" : ""}`}
+                            onClick={() => setChartView("binance")}
+                            style={{
+                                padding: "10px 20px",
+                                borderRadius: "4px",
+                                border: "none",
+                                backgroundColor: "#10b981", // 修改：设置为绿色
+                                color: "#ffffff",
+                                height: "40px",
+                                fontSize: "14px",
+                                display: "flex", // 新增：使用flex布局
+                                alignItems: "center", // 新增：使文字垂直居中
+                                justifyContent: "center", // 新增：使文字水平居中
+                            }}
+                        >
+                            Binance
+                        </button>
+                    </div>
+                    <div className="legend">
+                        {chartView !== "binance" && (
+                            <div className="legend-item">
+                                <div className="color-box uniswap"></div>
+                                <span>Uniswap V3</span>
+                            </div>
+                        )}
+                        {chartView !== "uniswap" && (
+                            <div className="legend-item">
+                                <div className="color-box binance"></div>
+                                <span>Binance</span>
+                            </div>
+                        )}
+                    </div>
                 </div>
-              ))}
+                <div className="chart-area">
+                    <div className="y-axis">
+                        {[2600, 2550, 2500, 2450, 2400].map((price) => (
+                            <div key={price} className="y-tick">
+                                {price}
+                            </div>
+                        ))}
+                    </div>
+                    <div className="chart-grid">
+                        <svg viewBox="0 0 800 300" className="price-chart">
+                            {/* 网格线 */}
+                            {[0, 1, 2, 3, 4].map((i) => (
+                                <line
+                                    key={i}
+                                    x1="0"
+                                    y1={i * 75}
+                                    x2="800"
+                                    y2={i * 75}
+                                    stroke="#eee"
+                                    strokeWidth="1"
+                                />
+                            ))}
+
+                            {/* Uniswap K线 */}
+                            {chartView !== "binance" &&
+                                uniswapPoints.map((point, i) => (
+                                    <g key={`uni-${i}`}>
+                                        {/* 影线 */}
+                                        <line
+                                            x1={point.x}
+                                            y1={point.yHigh}
+                                            x2={point.x}
+                                            y2={point.yLow}
+                                            stroke={point.isRising ? "#6366f1" : "#ef4444"}
+                                            strokeWidth="1"
+                                        />
+                                        {/* 实体 */}
+                                        {/* 修改: 增加K线图方块宽度 */}
+                                        <rect
+                                            x={point.x - 4}
+                                            y={Math.min(point.yOpen, point.yClose)}
+                                            width="8"
+                                            height={Math.max(
+                                                1,
+                                                Math.abs(point.yOpen - point.yClose)
+                                            )}
+                                            fill={point.isRising ? "#6366f1" : "#ef4444"}
+                                        />
+                                    </g>
+                                ))}
+
+                            {/* Binance K线 */}
+                            {chartView !== "uniswap" &&
+                                binancePoints.map((point, i) => (
+                                    <g key={`bin-${i}`} opacity="0.7">
+                                        {/* 影线 */}
+                                        <line
+                                            x1={point.x}
+                                            y1={point.yHigh}
+                                            x2={point.x}
+                                            y2={point.yLow}
+                                            stroke={point.isRising ? "#10b981" : "#f97316"}
+                                            strokeWidth="1"
+                                        />
+                                        {/* 实体 */}
+                                        {/* 修改: 增加K线图方块宽度 */}
+                                        <rect
+                                            x={point.x - 4}
+                                            y={Math.min(point.yOpen, point.yClose)}
+                                            width="8"
+                                            height={Math.max(
+                                                1,
+                                                Math.abs(point.yOpen - point.yClose)
+                                            )}
+                                            fill={point.isRising ? "#10b981" : "#f97316"}
+                                        />
+                                    </g>
+                                ))}
+                        </svg>
+                    </div>
+                </div>
+                <div className="x-axis">
+                    {[1, 5, 10, 15, 20, 25, 30].map((day) => (
+                        <div key={day} className="x-tick">
+                            9/{day}
+                        </div>
+                    ))}
+                </div>
             </div>
-            <div className="chart-grid">
-              <svg viewBox="0 0 800 300" className="price-chart">
-                {/* 网格线 */}
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <line
-                    key={i}
-                    x1="0"
-                    y1={i * 75}
-                    x2="800"
-                    y2={i * 75}
-                    stroke="#eee"
-                    strokeWidth="1"
-                  />
-                ))}
-
-                {/* Uniswap 折线 */}
-                <polyline
-                  fill="none"
-                  stroke="#6366f1"
-                  strokeWidth="3"
-                  points={uniswapPoints.map((p) => `${p.x},${p.y}`).join(" ")}
-                />
-
-                {/* Binance 折线 */}
-                <polyline
-                  fill="none"
-                  stroke="#10b981"
-                  strokeWidth="3"
-                  points={binancePoints.map((p) => `${p.x},${p.y}`).join(" ")}
-                />
-
-                {/* 数据点 - Uniswap */}
-                {uniswapPoints
-                  .filter((_, i) => i % 3 === 0)
-                  .map((point, i) => (
-                    <circle
-                      key={`uni-${i}`}
-                      cx={point.x}
-                      cy={point.y}
-                      r="4"
-                      fill="#6366f1"
-                    />
-                  ))}
-
-                {/* 数据点 - Binance */}
-                {binancePoints
-                  .filter((_, i) => i % 3 === 0)
-                  .map((point, i) => (
-                    <circle
-                      key={`bin-${i}`}
-                      cx={point.x}
-                      cy={point.y}
-                      r="4"
-                      fill="#10b981"
-                    />
-                  ))}
-              </svg>
-            </div>
-          </div>
-          <div className="x-axis">
-            {[1, 5, 10, 15, 20, 25, 30].map((day) => (
-              <div key={day} className="x-tick">
-                9/{day}
-              </div>
-            ))}
-          </div>
         </div>
-      </div>
     );
   };
 
