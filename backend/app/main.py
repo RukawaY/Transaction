@@ -188,3 +188,101 @@ def get_price_data(
         "uniswap": uniswap_ohlc,
         "binance": binance_ohlc
     }
+
+
+@app.get("/api/arbitrage/statistics")
+def get_arbitrage_statistics(db: Session = Depends(get_db)):
+    """
+    Signature: `GET /api/arbitrage/statistics`
+
+    Description:
+    返回预计算的非原子套利统计数据，直接读取 arbitrage_opportunities 表的汇总。
+    """
+    total_opportunities = db.query(func.count(models.ArbitrageOpportunity.id)).scalar() or 0
+    total_profit = (
+        db.query(func.coalesce(func.sum(models.ArbitrageOpportunity.profit), 0)).scalar() or 0.0
+    )
+    average_profit_rate = (
+        db.query(func.coalesce(func.avg(models.ArbitrageOpportunity.profit_rate), 0)).scalar() or 0.0
+    )
+    return {
+        "total_opportunities": int(total_opportunities),
+        "total_profit": float(total_profit),
+        "average_profit_rate": float(average_profit_rate * 100),
+    }
+
+
+@app.get("/api/arbitrage/opportunities")
+def get_arbitrage_opportunities(
+    page: int = 1,
+    page_size: int = 10,
+    sort_by: str = "profit",  # profit | timestamp
+    sort_order: str = "desc",
+    min_profit: Optional[float] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Signature: `GET /api/arbitrage/opportunities`
+
+    Description:
+    分页返回预计算的套利机会，支持最小利润过滤和排序。
+    """
+    page = max(1, page)
+    page_size = max(1, min(100, page_size))
+
+    query = db.query(models.ArbitrageOpportunity)
+    if min_profit is not None:
+        query = query.filter(models.ArbitrageOpportunity.profit >= min_profit)
+
+    total = query.count()
+    sort_column_map = {
+        "profit": models.ArbitrageOpportunity.profit,
+        "timestamp": models.ArbitrageOpportunity.timestamp,
+        "buy_timestamp": models.ArbitrageOpportunity.buy_timestamp,
+        "sell_timestamp": models.ArbitrageOpportunity.sell_timestamp,
+    }
+    sort_column = sort_column_map.get(sort_by, models.ArbitrageOpportunity.profit)
+    order_clause = (
+        sort_column.desc() if sort_order.lower() == "desc" else sort_column.asc()
+    )
+
+    opportunities = (
+        query.order_by(order_clause)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    def serialize_timestamp(dt: Optional[datetime]) -> Optional[str]:
+        if not dt:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat().replace("+00:00", "Z")
+
+    data = []
+    for opp in opportunities:
+        data.append(
+            {
+                "id": opp.id,
+                "transaction_hash": opp.transaction_hash,
+                "timestamp": serialize_timestamp(opp.timestamp),
+                "buy_timestamp": serialize_timestamp(opp.buy_timestamp),
+                "sell_timestamp": serialize_timestamp(opp.sell_timestamp),
+                "uniswap_price": opp.uniswap_price,
+                "binance_price": opp.binance_price,
+                "price_diff_percent": opp.price_diff_percent,
+                "profit": opp.profit,
+                "profit_rate": (opp.profit_rate or 0.0) * 100,
+                "volume": opp.volume,
+            }
+        )
+
+    total_pages = max(1, (total + page_size - 1) // page_size) if total else 1
+    return {
+        "opportunities": data,
+        "total_pages": total_pages,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
