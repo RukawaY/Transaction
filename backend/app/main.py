@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, text
 from datetime import datetime, timezone, time
@@ -10,6 +11,15 @@ from . import models
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+# 添加 CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # 允许前端访问
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许所有 HTTP 方法
+    allow_headers=["*"],  # 允许所有请求头
+)
 
 @app.get("/api/health")
 def health_check():
