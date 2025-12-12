@@ -1,419 +1,529 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import "./PriceDashboard.css";
 
-function PriceDashboard() {
+const PriceDashboard = () => {
   const [priceData, setPriceData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [chartView, setChartView] = useState("both"); // 'both', 'uniswap', 'binance'
 
+  const [dataSource, setDataSource] = useState("uniswap");
+  const [visibleCount, setVisibleCount] = useState(30);
+  const [hoveredItem, setHoveredItem] = useState(null);
+
+  // --- 数据加载 (保持不变) ---
   useEffect(() => {
-    fetchData();
+    const loadData = async () => {
+      try {
+        setLoading(true);
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        const data = generateMockData();
+        setPriceData(data);
+      } catch (err) {
+        setError(err.message || "Failed to load data");
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadData();
   }, []);
 
-  useEffect(() => {
-    console.log("[PriceDashboard] priceData state changed:", priceData);
-  }, [priceData]);
-
-  useEffect(() => {
-    console.log("[PriceDashboard] chartView changed:", chartView);
-  }, [chartView]);
-
-  // 生成模拟数据的函数
   const generateMockData = () => {
     const uniswapData = [];
     const binanceData = [];
+    const totalDays = 180;
 
-    // 生成30天的数据
-    for (let i = 1; i <= 30; i++) {
-      const basePrice = 2500 + Math.sin(i * 0.5) * 50;
+    for (let i = 1; i <= totalDays; i++) {
+      const trend = i * 2;
+      const volatility = 40;
+      const basePrice = 2500 + Math.sin(i * 0.1) * 200 + trend;
 
-      // Uniswap数据
+      const date = new Date();
+      date.setDate(date.getDate() - (totalDays - i));
+      const month = (date.getMonth() + 1).toString().padStart(2, "0");
+      const day = date.getDate().toString().padStart(2, "0");
+      const dateStr = `${date.getFullYear()}-${month}-${day}`;
+      const displayTime = `${month}-${day}`;
+
+      // Uniswap
+      const uOpenOffset = (Math.random() - 0.5) * volatility;
+      const uCloseOffset = (Math.random() - 0.5) * volatility;
+      const uOpen = basePrice + uOpenOffset;
+      const uClose = basePrice + uCloseOffset;
+      const uHigh =
+        Math.max(uOpen, uClose) + Math.random() * (volatility * 0.5);
+      const uLow = Math.min(uOpen, uClose) - Math.random() * (volatility * 0.5);
+      const uVol = Math.random() * 1000 + 500;
+
       uniswapData.push({
-        timestamp: `2025-09-${i.toString().padStart(2, "0")}T12:00:00Z`,
-        open: basePrice - Math.random() * 10,
-        high: basePrice + Math.random() * 15,
-        low: basePrice - Math.random() * 15,
-        close: basePrice + Math.random() * 10,
-        volume: Math.random() * 100,
+        id: i,
+        timestamp: dateStr,
+        displayTime,
+        open: uOpen,
+        high: uHigh,
+        low: uLow,
+        close: uClose,
+        volume: uVol,
       });
 
-      // Binance数据 (与Uniswap略有不同，模拟价格差异)
+      // Binance
+      const bBase = basePrice + (Math.random() - 0.5) * 15;
+      const bOpen = bBase + uOpenOffset;
+      const bClose = bBase + uCloseOffset;
+      const bHigh =
+        Math.max(bOpen, bClose) + Math.random() * (volatility * 0.5);
+      const bLow = Math.min(bOpen, bClose) - Math.random() * (volatility * 0.5);
+      const bVol = uVol * 1.5;
+
       binanceData.push({
-        timestamp: `2025-09-${i.toString().padStart(2, "0")}T12:00:00Z`,
-        open: basePrice - Math.random() * 8 + 5,
-        high: basePrice + Math.random() * 12 + 5,
-        low: basePrice - Math.random() * 12 + 5,
-        close: basePrice + Math.random() * 8 + 5,
-        volume: Math.random() * 200,
+        id: i,
+        timestamp: dateStr,
+        displayTime,
+        open: bOpen,
+        high: bHigh,
+        low: bLow,
+        close: bClose,
+        volume: bVol,
       });
     }
-
-    return {
-      uniswap: uniswapData,
-      binance: binanceData,
-    };
+    return { uniswap: uniswapData, binance: binanceData };
   };
 
-  // 修改：添加一个函数来获取数据（支持mock或后端）
-  const fetchData = async () => {
-    try {
-      setLoading(true);
+  const fullData = useMemo(() => {
+    if (!priceData) return [];
+    return priceData[dataSource];
+  }, [priceData, dataSource]);
 
-      // 检查是否应该使用后端API
-      const useBackend = process.env.REACT_APP_USE_BACKEND === "true";
+  const activeData = useMemo(() => {
+    if (!fullData || !fullData.length) return [];
+    const safeCount = Math.min(visibleCount, fullData.length);
+    return fullData.slice(-safeCount);
+  }, [fullData, visibleCount]);
 
-      if (useBackend) {
-        // 从后端获取数据
-        const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
-        console.log("[PriceDashboard] Fetching backend data from:", `${backendUrl}/api/price-data`);
-        const response = await fetch(`${backendUrl}/api/price-data`);
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        console.log("[PriceDashboard] Backend response:", data);
-        setPriceData(data);
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        // 使用mock数据
-        const mockData = generateMockData();
-        console.log("[PriceDashboard] Using mock data:", mockData);
-        setPriceData(mockData);
+  const currentStats = useMemo(() => {
+    if (!activeData || !activeData.length) return null;
+    const latest = activeData[activeData.length - 1];
+    const allHighs = activeData.map((d) => d.high);
+    const maxPrice = Math.max(...allHighs);
+    const change = latest.close - latest.open;
+    const changePercent = (change / latest.open) * 100;
+
+    return {
+      price: latest.close,
+      high: latest.high,
+      low: latest.low,
+      volume: latest.volume,
+      change,
+      changePercent,
+      maxPrice,
+    };
+  }, [activeData]);
+
+  // --- 尺寸与绘图逻辑 ---
+
+  const containerRef = useRef(null);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
+  // 监听窗口大小变化
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        setDimensions({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight,
+        });
       }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 计算价格范围
-  const calculatePriceRange = (data) => {
-    if (!data || (!data.uniswap && !data.binance)) {
-      return { min: 2400, max: 2600 }; // 默认范围
-    }
-
-    let allPrices = [];
-
-    // 收集所有价格数据
-    if (data.uniswap && data.uniswap.length > 0) {
-      data.uniswap.forEach((item) => {
-        allPrices.push(item.open, item.high, item.low, item.close);
-      });
-    }
-
-    if (data.binance && data.binance.length > 0) {
-      data.binance.forEach((item) => {
-        allPrices.push(item.open, item.high, item.low, item.close);
-      });
-    }
-
-    if (allPrices.length === 0) {
-      return { min: 2400, max: 2600 }; // 默认范围
-    }
-
-    const min = Math.min(...allPrices);
-    const max = Math.max(...allPrices);
-
-    // 添加一些边距以便更好地显示
-    const padding = (max - min) * 0.1;
-    return {
-      min: Math.max(0, min - padding),
-      max: max + padding,
-    };
-  };
-
-  // 生成图表点数据
-  const generateChartPoints = (data, isUniswap = true, priceRange) => {
-    if (!data || !priceRange) return [];
-
-    const dataset = isUniswap ? data.uniswap : data.binance;
-    if (!dataset || dataset.length === 0) return [];
-
-    const { min, max } = priceRange;
-    const range = max - min || 1; // 防止除0
-    const chartHeight = 250; // SVG 图表可用高度
-    const chartTop = 25; // 顶部边距
-    const chartBottom = chartTop + chartHeight;
-    const chartWidth = 750;
-    const chartLeft = 25;
-    const xStep = dataset.length > 1 ? chartWidth / (dataset.length - 1) : 0;
-
-    const scaleY = (value) => {
-      const normalized = (value - min) / range;
-      return chartBottom - normalized * chartHeight;
     };
 
-    return dataset.map((item, index) => ({
-      x: chartLeft + xStep * index,
-      yOpen: scaleY(item.open),
-      yHigh: scaleY(item.high),
-      yLow: scaleY(item.low),
-      yClose: scaleY(item.close),
-      open: item.open,
-      high: item.high,
-      low: item.low,
-      close: item.close,
-      isRising: item.close >= item.open, // 判断是否上涨
-    }));
-  };
+    window.addEventListener("resize", updateSize);
 
-  // 生成Y轴刻度
-  const generateYTicks = (priceRange) => {
-    if (!priceRange || priceRange.min === priceRange.max) {
-      return [2600, 2550, 2500, 2450, 2400]; // 默认值
-    }
+    // 关键：延迟一下确保 DOM 渲染完毕后再计算，防止高度为 0
+    const timer = setTimeout(updateSize, 0);
 
-    const { min, max } = priceRange;
-    const range = max - min || 1;
-    const step = range / 4; // 5个刻度点
+    return () => {
+      window.removeEventListener("resize", updateSize);
+      clearTimeout(timer);
+    };
+  }, [loading]); // 当 loading 结束时也会触发一次
 
-    return new Array(5).fill(0).map((_, idx) => {
-      const value = max - step * idx;
-      return Math.round(value);
-    });
-  };
-
-  const renderChart = () => {
-    if (loading) {
-        return <div className="chart-placeholder">加载中...</div>;
-    }
-
-    if (error) {
-        return <div className="chart-placeholder">错误: {error}</div>;
-    }
-
-    if (!priceData) {
-        return <div className="chart-placeholder">无数据</div>;
-    }
-
-    const priceRange = calculatePriceRange(priceData);
-    const uniswapPoints = generateChartPoints(priceData, true, priceRange);
-    const binancePoints = generateChartPoints(priceData, false, priceRange);
-    const yTicks = generateYTicks(priceRange);
-
-    return (
-        <div className="chart-container">
-            <div className="chart-wrapper">
-                <div className="chart-header">
-                    <h3>USDT/ETH 价格对比 (2025年9月)</h3>
-                    <div className="chart-controls">
-                        {/* 修改: 更新按钮样式并统一高度 */}
-                        <button
-                            className={`chart-button ${chartView === "both" ? "active" : ""}`}
-                            onClick={() => setChartView("both")}
-                            style={{
-                                marginRight: "10px",
-                                padding: "10px 20px",
-                                borderRadius: "4px",
-                                border: "none",
-                                backgroundColor: "#808695", // 修改：设置为灰色
-                                color: "#ffffff",
-                                height: "40px",
-                                fontSize: "14px",
-                                display: "flex", // 新增：使用flex布局
-                                alignItems: "center", // 新增：使文字垂直居中
-                                justifyContent: "center", // 新增：使文字水平居中
-                            }}
-                        >
-                            显示全部
-                        </button>
-                        <button
-                            className={`chart-button ${chartView === "uniswap" ? "active" : ""}`}
-                            onClick={() => setChartView("uniswap")}
-                            style={{
-                                marginRight: "10px",
-                                padding: "10px 20px",
-                                borderRadius: "4px",
-                                border: "none",
-                                backgroundColor: "#6366f1", // 修改：设置为紫色
-                                color: "#ffffff",
-                                height: "40px",
-                                fontSize: "14px",
-                                display: "flex", // 新增：使用flex布局
-                                alignItems: "center", // 新增：使文字垂直居中
-                                justifyContent: "center", // 新增：使文字水平居中
-                            }}
-                        >
-                            Uniswap V3
-                        </button>
-                        <button
-                            className={`chart-button ${chartView === "binance" ? "active" : ""}`}
-                            onClick={() => setChartView("binance")}
-                            style={{
-                                padding: "10px 20px",
-                                borderRadius: "4px",
-                                border: "none",
-                                backgroundColor: "#10b981", // 修改：设置为绿色
-                                color: "#ffffff",
-                                height: "40px",
-                                fontSize: "14px",
-                                display: "flex", // 新增：使用flex布局
-                                alignItems: "center", // 新增：使文字垂直居中
-                                justifyContent: "center", // 新增：使文字水平居中
-                            }}
-                        >
-                            Binance
-                        </button>
-                    </div>
-                    <div className="legend">
-                        {chartView !== "binance" && (
-                            <div className="legend-item">
-                                <div className="color-box uniswap"></div>
-                                <span>Uniswap V3</span>
-                            </div>
-                        )}
-                        {chartView !== "uniswap" && (
-                            <div className="legend-item">
-                                <div className="color-box binance"></div>
-                                <span>Binance</span>
-                            </div>
-                        )}
-                    </div>
-                </div>
-                <div className="chart-area">
-                    <div className="y-axis">
-                        {yTicks.map((price) => (
-                            <div key={price} className="y-tick">
-                                {price}
-                            </div>
-                        ))}
-                    </div>
-                    <div className="chart-grid">
-                        <svg viewBox="0 0 800 300" className="price-chart">
-                            {/* 网格线 */}
-                            {[0, 1, 2, 3, 4].map((i) => (
-                                <line
-                                    key={i}
-                                    x1="0"
-                                    y1={i * 75}
-                                    x2="800"
-                                    y2={i * 75}
-                                    stroke="#eee"
-                                    strokeWidth="1"
-                                />
-                            ))}
-
-                            {/* Uniswap K线 */}
-                            {chartView !== "binance" &&
-                                uniswapPoints.map((point, i) => (
-                                    <g key={`uni-${i}`}>
-                                        {/* 影线 */}
-                                        <line
-                                            x1={point.x}
-                                            y1={point.yHigh}
-                                            x2={point.x}
-                                            y2={point.yLow}
-                                            stroke={point.isRising ? "#6366f1" : "#ef4444"}
-                                            strokeWidth="1"
-                                        />
-                                        {/* 实体 */}
-                                        {/* 修改: 增加K线图方块宽度 */}
-                                        <rect
-                                            x={point.x - 4}
-                                            y={Math.min(point.yOpen, point.yClose)}
-                                            width="8"
-                                            height={Math.max(
-                                                1,
-                                                Math.abs(point.yOpen - point.yClose)
-                                            )}
-                                            fill={point.isRising ? "#6366f1" : "#ef4444"}
-                                        />
-                                    </g>
-                                ))}
-
-                            {/* Binance K线 */}
-                            {chartView !== "uniswap" &&
-                                binancePoints.map((point, i) => (
-                                    <g key={`bin-${i}`} opacity="0.7">
-                                        {/* 影线 */}
-                                        <line
-                                            x1={point.x}
-                                            y1={point.yHigh}
-                                            x2={point.x}
-                                            y2={point.yLow}
-                                            stroke={point.isRising ? "#10b981" : "#f97316"}
-                                            strokeWidth="1"
-                                        />
-                                        {/* 实体 */}
-                                        {/* 修改: 增加K线图方块宽度 */}
-                                        <rect
-                                            x={point.x - 4}
-                                            y={Math.min(point.yOpen, point.yClose)}
-                                            width="8"
-                                            height={Math.max(
-                                                1,
-                                                Math.abs(point.yOpen - point.yClose)
-                                            )}
-                                            fill={point.isRising ? "#10b981" : "#f97316"}
-                                        />
-                                    </g>
-                                ))}
-                        </svg>
-                    </div>
-                </div>
-                <div className="x-axis">
-                    {[1, 5, 10, 15, 20, 25, 30].map((day) => (
-                        <div key={day} className="x-tick">
-                            9/{day}
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </div>
+  const handleZoom = (delta) => {
+    if (!fullData || !fullData.length) return;
+    setVisibleCount((prev) =>
+      Math.max(7, Math.min(prev + delta, fullData.length))
     );
   };
 
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const handleWheel = (e) => {
+      e.preventDefault();
+      const zoomStrength = Math.abs(e.deltaY) > 50 ? 5 : 2;
+      const direction = e.deltaY > 0 ? 1 : -1;
+      handleZoom(direction * zoomStrength);
+    };
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleWheel);
+  }, [fullData]);
+
+  // 生成绘图点
+  const { points, yTicks } = useMemo(() => {
+    if (!activeData.length || !dimensions.width || !dimensions.height)
+      return { points: [], yTicks: [] };
+
+    const paddingY = 30; // 增加一点上下留白
+    const minPrice = Math.min(...activeData.map((d) => d.low));
+    const maxPrice = Math.max(...activeData.map((d) => d.high));
+    const range = maxPrice - minPrice;
+    const safeRange = range === 0 ? 1 : range;
+
+    const getY = (price) => {
+      const ratio = (price - minPrice) / safeRange;
+      const drawHeight = dimensions.height - paddingY * 2;
+      return dimensions.height - paddingY - ratio * drawHeight;
+    };
+
+    const count = activeData.length;
+    const xStep = dimensions.width / count;
+    const candleWidth = Math.max(1, Math.min(xStep * 0.7, 40));
+
+    const points = activeData.map((d, i) => ({
+      ...d,
+      x: i * xStep + xStep / 2,
+      xStart: i * xStep,
+      yOpen: getY(d.open),
+      yClose: getY(d.close),
+      yHigh: getY(d.high),
+      yLow: getY(d.low),
+      width: candleWidth,
+      isRising: d.close >= d.open,
+    }));
+
+    const yTicks = [];
+    for (let i = 0; i <= 5; i++) {
+      const val = minPrice + (safeRange * i) / 5;
+      yTicks.push({ val, y: getY(val) });
+    }
+
+    return { points, yTicks };
+  }, [activeData, dimensions]);
+
+  const handleMouseMove = (e) => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      setMousePos({
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+      });
+    }
+  };
+
+  // 恢复原来逻辑：鼠标悬停在特定蜡烛上
+  const handleMouseEnterPoint = (point) => {
+    setHoveredItem(point);
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredItem(null);
+  };
+
+  // 查找当前 hover 的数据（用于 Tooltip）
+  const tooltipData = hoveredItem;
+
+  if (loading)
+    return <div className="loading-screen">Loading Market Data...</div>;
+  if (error) return <div className="error-screen">{error}</div>;
+
   return (
-    <div className="page-container">
-      {/* Hero Section - Full Screen */}
-      <section className="hero-section">
-        <div className="hero-content">
-          <h1 className="hero-title">价格看板</h1>
-          <p className="hero-subtitle">
-            Uniswap V3 与 Binance 历史成交数据可视化
-          </p>
-
-          {/* 价格对比图表 */}
-          <div className="chart-placeholder">{renderChart()}</div>
-        </div>
-      </section>
-
-      {/* Content Section */}
-      <section className="content-section">
-        <div className="content-wrapper">
-          <h2 className="section-title">数据分析</h2>
-          <div className="analysis-content">
-            <div className="analysis-card">
-              <h3>价格趋势对比</h3>
-              <p>
-                在2025年9月期间，Uniswap
-                V3和Binance上的USDT/ETH交易对价格走势总体保持一致，
-                但在某些时段存在明显价差，这为套利交易提供了机会。
-              </p>
-            </div>
-
-            <div className="analysis-card">
-              <h3>市场波动性</h3>
-              <p>
-                数据显示，Binance上的价格波动通常比Uniswap V3更剧烈，
-                这可能与两个市场的流动性深度和交易量差异有关。
-              </p>
-            </div>
-
-            <div className="analysis-card">
-              <h3>套利机会分析</h3>
-              <p>
-                当两个平台间的价差超过0.3%时，扣除交易成本后仍有盈利空间。
-                在9月份共检测到约120次潜在套利机会。
-              </p>
+    <div className="dashboard-container">
+      {/* 1. Header (保持你的新样式) */}
+      <header className="dashboard-header">
+        <div className="pair-info-group">
+          <div className="coin-icon">ETH</div>
+          <div className="coin-details">
+            <h2 className="pair-title">ETH / USDT</h2>
+            <div className="tags">
+              <span className="tag-source">
+                {dataSource === "uniswap" ? "Uniswap V3" : "Binance"}
+              </span>
             </div>
           </div>
         </div>
-      </section>
+
+        {currentStats && (
+          <div className="stats-group">
+            <div className="stat-block">
+              <span
+                className={`current-price ${
+                  currentStats.change >= 0 ? "text-up" : "text-down"
+                }`}
+              >
+                ${currentStats.price.toFixed(2)}
+              </span>
+              <span className="stat-label">Last Price</span>
+            </div>
+            <div className="stat-block">
+              <span
+                className={`stat-value ${
+                  currentStats.change >= 0 ? "text-up" : "text-down"
+                }`}
+              >
+                {currentStats.change >= 0 ? "+" : ""}
+                {currentStats.changePercent.toFixed(2)}%
+              </span>
+              <span className="stat-label">24h Change</span>
+            </div>
+            <div className="stat-block">
+              <span className="stat-value text-normal">
+                ${currentStats.high.toFixed(2)}
+              </span>
+              <span className="stat-label">24h High</span>
+            </div>
+            <div className="stat-block">
+              <span className="stat-value text-normal">
+                ${currentStats.volume.toFixed(0)}
+              </span>
+              <span className="stat-label">24h Volume</span>
+            </div>
+          </div>
+        )}
+      </header>
+
+      {/* 2. Main Content */}
+      <main className="dashboard-main">
+        {/* Left: Chart Section */}
+        <section className="chart-card">
+          {/* Toolbar (保持你的新样式) */}
+          <div className="chart-toolbar">
+            <div className="toolbar-group">
+              <span className="toolbar-label">Time</span>
+              <div className="time-btns">
+                {[7, 30, 90].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setVisibleCount(d)}
+                    className={`time-btn ${visibleCount === d ? "active" : ""}`}
+                  >
+                    {d}D
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="toolbar-group">
+              <div className="segmented-control">
+                <button
+                  className={dataSource === "uniswap" ? "active-uni" : ""}
+                  onClick={() => setDataSource("uniswap")}
+                >
+                  Uniswap
+                </button>
+                <div className="divider"></div>
+                <button
+                  className={dataSource === "binance" ? "active-bin" : ""}
+                  onClick={() => setDataSource("binance")}
+                >
+                  Binance
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Chart Canvas */}
+          <div
+            className="chart-area"
+            ref={containerRef}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          >
+            {/* 
+                修正重点：移除了 .ohlc-legend，改为下方的 floating tooltip 
+                同时确保 svg 占满空间
+             */}
+
+            <svg width="100%" height="100%" className="chart-svg">
+              {/* Grid Lines */}
+              {yTicks.map((t, i) => (
+                <g key={i}>
+                  <line
+                    x1="0"
+                    y1={t.y}
+                    x2="100%"
+                    y2={t.y}
+                    className="grid-line"
+                  />
+                  <text
+                    x={dimensions.width - 6}
+                    y={t.y - 4}
+                    className="axis-label"
+                  >
+                    {t.val.toFixed(0)}
+                  </text>
+                </g>
+              ))}
+
+              {/* Candles */}
+              {points.map((p) => (
+                <g key={p.id} className="candle-group">
+                  <line
+                    x1={p.x}
+                    y1={p.yHigh}
+                    x2={p.x}
+                    y2={p.yLow}
+                    className={p.isRising ? "stroke-up" : "stroke-down"}
+                  />
+                  <rect
+                    x={p.x - p.width / 2}
+                    y={Math.min(p.yOpen, p.yClose)}
+                    width={p.width}
+                    height={Math.max(1, Math.abs(p.yOpen - p.yClose))}
+                    className={p.isRising ? "fill-up" : "fill-down"}
+                    shapeRendering="crispEdges"
+                  />
+                  {/* Invisible Hit Area - 恢复这个逻辑用于触发 tooltip */}
+                  <rect
+                    x={p.xStart}
+                    y="0"
+                    width={dimensions.width / points.length}
+                    height="100%"
+                    fill="transparent"
+                    onMouseEnter={() => handleMouseEnterPoint(p)}
+                  />
+                </g>
+              ))}
+
+              {/* Crosshair Line (可选，随鼠标位置) */}
+              {tooltipData && (
+                <line
+                  x1={tooltipData.x}
+                  y1="0"
+                  x2={tooltipData.x}
+                  y2="100%"
+                  className="crosshair-line"
+                />
+              )}
+            </svg>
+
+            {/* X Axis Time Labels */}
+            <div className="x-axis">
+              {points
+                .filter((_, i) => i % Math.ceil(points.length / 6) === 0)
+                .map((p) => (
+                  <span key={p.id} style={{ left: p.x }}>
+                    {p.displayTime}
+                  </span>
+                ))}
+            </div>
+
+            {/* 恢复：Floating Tooltip (跟随逻辑) */}
+            {tooltipData && (
+              <div
+                className="floating-tooltip"
+                style={{
+                  // 简单的防溢出逻辑：如果靠右，就显示在左边
+                  left:
+                    mousePos.x > dimensions.width / 2
+                      ? mousePos.x - 180
+                      : mousePos.x + 20,
+                  top: Math.min(mousePos.y, dimensions.height - 150),
+                }}
+              >
+                <div className="tooltip-date">{tooltipData.timestamp}</div>
+                <div className="tooltip-row">
+                  <span>Open:</span>
+                  <span className="font-mono">
+                    {tooltipData.open.toFixed(2)}
+                  </span>
+                </div>
+                <div className="tooltip-row">
+                  <span>High:</span>
+                  <span className="font-mono">
+                    {tooltipData.high.toFixed(2)}
+                  </span>
+                </div>
+                <div className="tooltip-row">
+                  <span>Low:</span>
+                  <span className="font-mono">
+                    {tooltipData.low.toFixed(2)}
+                  </span>
+                </div>
+                <div className="tooltip-row">
+                  <span>Close:</span>
+                  <span
+                    className={`font-mono ${
+                      tooltipData.isRising ? "text-up" : "text-down"
+                    }`}
+                  >
+                    {tooltipData.close.toFixed(2)}
+                  </span>
+                </div>
+                <div className="tooltip-row">
+                  <span>Vol:</span>
+                  <span className="font-mono">
+                    {tooltipData.volume.toFixed(0)}
+                  </span>
+                </div>
+                <div className="tooltip-row">
+                  <span>Chg:</span>
+                  <span
+                    className={`font-mono ${
+                      tooltipData.isRising ? "text-up" : "text-down"
+                    }`}
+                  >
+                    {(tooltipData.close - tooltipData.open).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Right: Order List (保持不变) */}
+        <aside className="table-card">
+          <div className="table-header">
+            <h3>Market Trades</h3>
+          </div>
+          <div className="table-body">
+            <table>
+              <thead>
+                <tr>
+                  <th className="text-left">Time</th>
+                  <th className="text-right">Price</th>
+                  <th className="text-right">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...activeData].reverse().map((row) => (
+                  <tr
+                    key={row.id}
+                    className={
+                      hoveredItem && hoveredItem.id === row.id
+                        ? "row-hover"
+                        : ""
+                    }
+                    onMouseEnter={() => setHoveredItem(row)}
+                    onMouseLeave={() => setHoveredItem(null)}
+                  >
+                    <td className="text-left text-dim">{row.displayTime}</td>
+                    <td
+                      className={`text-right ${
+                        row.close >= row.open ? "text-up" : "text-down"
+                      }`}
+                    >
+                      {row.close.toFixed(2)}
+                    </td>
+                    <td className="text-right text-normal">
+                      {row.volume.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </aside>
+      </main>
     </div>
   );
-}
+};
 
 export default PriceDashboard;
