@@ -75,7 +75,6 @@ class ArbitrageOpportunity(Base):
     direction = Column(String, nullable=True)  # "cex->dex" or "dex->cex"
     created_at = Column(DateTime, server_default=func.now())
 
-
 class ArbitrageOpportunityMinute(Base):
     """
     按分钟预计算的套利机会
@@ -93,4 +92,3 @@ class ArbitrageOpportunityMinute(Base):
     direction = Column(String)  # "cex->dex" or "dex->cex"
     uniswap_trade_count = Column(Integer)  # 该分钟 Uniswap 交易数量
     binance_trade_count = Column(Integer)  # 该分钟 Binance 交易数量
-    created_at = Column(DateTime, server_default=func.now())
