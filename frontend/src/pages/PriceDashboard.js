@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useMemo, useRef } from "react";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import "./PriceDashboard.css";
 
 const USE_BACKEND =
@@ -10,6 +16,7 @@ const API_BASE_URL = (
 const PriceDashboard = () => {
   const [priceData, setPriceData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // eslint-disable-next-line no-unused-vars
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState("");
 
@@ -115,29 +122,36 @@ const PriceDashboard = () => {
     return { uniswap: uniswapData, binance: binanceData };
   };
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        setLoading(true);
-        if (USE_BACKEND) {
-          const backendData = await fetchBackendData();
-          if (!backendData.uniswap.length)
-            throw new Error("Empty backend data");
-          setPriceData(backendData);
-        } else {
-          setPriceData(generateMockData());
-          setNotice("已使用模拟数据");
-        }
-      } catch (err) {
-        console.warn("Falling back to mock data", err);
+  // --- 修改：将数据加载逻辑提取为 useCallback ---
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      // 清除之前的 Notice 以便用户感知刷新
+      setNotice("");
+
+      if (USE_BACKEND) {
+        const backendData = await fetchBackendData();
+        if (!backendData.uniswap.length) throw new Error("Empty backend data");
+        setPriceData(backendData);
+      } else {
+        // 模拟网络延迟，让刷新动画显示一会
+        await new Promise((resolve) => setTimeout(resolve, 300));
         setPriceData(generateMockData());
-        setNotice("数据加载失败，已显示模拟数据");
-      } finally {
-        setLoading(false);
+        setNotice("已刷新：使用模拟数据");
       }
-    };
-    loadData();
+    } catch (err) {
+      console.warn("Falling back to mock data", err);
+      setPriceData(generateMockData());
+      setNotice("数据加载失败，已显示模拟数据");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // 初始加载
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const fullData = useMemo(() => {
     return priceData?.uniswap || [];
@@ -450,7 +464,9 @@ const PriceDashboard = () => {
 
   const snapX = hoveredItem ? hoveredItem.x : mousePos.x;
 
-  if (loading)
+  // 注意：不再整个页面 Loading，而是在 Chart 区域处理 Loading 状态或允许透明刷新
+  // 为了不闪烁，这里只在初始化没有数据时显示全屏 Loading
+  if (loading && !priceData)
     return <div className="loading-screen">Loading Market Data...</div>;
 
   return (
@@ -512,7 +528,6 @@ const PriceDashboard = () => {
                 </div>
                 <div className="stat-block">
                   <span className="stat-label">Date</span>
-                  {/* 使用 text-bright */}
                   <span className="stat-value text-bright">
                     {displayStats.timestamp.slice(5, 10)}
                   </span>
@@ -544,21 +559,18 @@ const PriceDashboard = () => {
                 </div>
                 <div className="stat-block">
                   <span className="stat-label">High</span>
-                  {/* 使用 text-bright */}
                   <span className="stat-value text-bright">
                     ${displayStats.high.toFixed(2)}
                   </span>
                 </div>
                 <div className="stat-block">
                   <span className="stat-label">Low</span>
-                  {/* 使用 text-bright */}
                   <span className="stat-value text-bright">
                     ${displayStats.low.toFixed(2)}
                   </span>
                 </div>
                 <div className="stat-block">
                   <span className="stat-label">Vol</span>
-                  {/* 使用 text-bright */}
                   <span className="stat-value text-bright">
                     {displayStats.volume.toFixed(0)}
                   </span>
@@ -595,6 +607,9 @@ const PriceDashboard = () => {
                   marginLeft: "12px",
                   borderLeft: "1px solid var(--border-color)",
                   paddingLeft: "12px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
                 }}
               >
                 <input
@@ -603,6 +618,29 @@ const PriceDashboard = () => {
                   onChange={handleDateChange}
                   max={new Date().toISOString().split("T")[0]}
                 />
+
+                {/* --- 新增刷新按钮 --- */}
+                <button
+                  className={`refresh-btn ${loading ? "spinning" : ""}`}
+                  onClick={fetchData}
+                  title="Refresh Data"
+                  disabled={loading}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M23 4v6h-6"></path>
+                    <path d="M1 20v-6h6"></path>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                  </svg>
+                </button>
               </div>
             </div>
 
