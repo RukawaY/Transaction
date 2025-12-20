@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import './ArbitrageAnalysis.css';
 
 // API基础URL（根据项目配置调整）
-const DEFAULT_API_BASE = 'http://127.0.0.1:8000/api';
-const API_BASE_URL = process.env.REACT_APP_API_URL || DEFAULT_API_BASE;
+// 如果 REACT_APP_API_URL 未设置，使用相对路径（通过 nginx 代理）
+// 否则使用指定的 URL（用于本地开发）
+const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
 
 // 格式化函数（在组件外部定义，以便在子组件中使用）
 const formatDateTime = (timestamp) => {
@@ -525,13 +526,78 @@ function ArbitrageAnalysis() {
 function TimelineVisualization({ opportunities, onHover, hoveredOpportunity }) {
   const containerRef = React.useRef(null);
   const svgRef = React.useRef(null);
-  const [timeGranularity, setTimeGranularity] = React.useState(1440); // 时间粒度（分钟），默认1440分钟（24小时）
+  const [timeGranularity, setTimeGranularity] = React.useState(5); // 时间粒度（分钟），默认5分钟
   const [dimensions, setDimensions] = React.useState({ width: 1200, height: 300 }); // 增加高度以容纳垂直排列的点
   const [scale, setScale] = React.useState(1); // 缩放比例，1表示原始大小
   const [panOffset, setPanOffset] = React.useState(0); // 平移偏移量（像素）
   const [isDragging, setIsDragging] = React.useState(false);
   const [dragStart, setDragStart] = React.useState({ x: 0, offset: 0 });
   const [isHoveringTimeline, setIsHoveringTimeline] = React.useState(false); // 鼠标是否在时间轴区域内
+  const [priceData, setPriceData] = React.useState(null); // ETH价格数据
+  const [priceDataLoading, setPriceDataLoading] = React.useState(false);
+
+  // 获取ETH价格数据
+  const fetchPriceData = React.useCallback(async () => {
+    if (opportunities.length === 0) return;
+    
+    try {
+      setPriceDataLoading(true);
+      // 计算时间范围
+      const sortedOpps = [...opportunities]
+        .map(opp => ({ ...opp, timestamp: new Date(opp.timestamp) }))
+        .sort((a, b) => a.timestamp - b.timestamp);
+      
+      if (sortedOpps.length === 0) return;
+      
+      const minTime = sortedOpps[0].timestamp;
+      const maxTime = sortedOpps[sortedOpps.length - 1].timestamp;
+      
+      // 计算日期范围（用于API查询）
+      const startDate = new Date(minTime);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(maxTime);
+      endDate.setHours(23, 59, 59, 999);
+      
+      // 构建API URL
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://127.0.0.1:8000';
+      const apiBase = backendUrl.replace(/\/$/, '');
+      const startDateStr = startDate.toISOString().split('T')[0];
+      const endDateStr = endDate.toISOString().split('T')[0];
+      
+      const response = await fetch(`${apiBase}/api/price-data?start_date=${startDateStr}&end_date=${endDateStr}`);
+      if (!response.ok) {
+        throw new Error(`获取价格数据失败: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      // 使用Uniswap数据，如果没有则使用Binance数据
+      const priceSeries = data.uniswap && data.uniswap.length > 0 
+        ? data.uniswap 
+        : (data.binance && data.binance.length > 0 ? data.binance : []);
+      
+      // 规范化数据
+      const normalized = priceSeries
+        .filter(Boolean)
+        .map(item => ({
+          timestamp: new Date(item.timestamp),
+          price: Number(item.close || 0)
+        }))
+        .filter(item => item.price > 0 && !isNaN(item.timestamp.getTime()))
+        .sort((a, b) => a.timestamp - b.timestamp);
+      
+      setPriceData(normalized);
+    } catch (err) {
+      console.error('获取价格数据错误:', err);
+      setPriceData(null);
+    } finally {
+      setPriceDataLoading(false);
+    }
+  }, [opportunities]);
+
+  // 当套利机会数据变化时获取价格数据
+  React.useEffect(() => {
+    fetchPriceData();
+  }, [fetchPriceData]);
 
   // 计算利润率范围（用于颜色映射）- 需要在updateDimensions之前计算
   const profitRatesForHeight = opportunities.length > 0 
@@ -731,6 +797,63 @@ function TimelineVisualization({ opportunities, onHover, hoveredOpportunity }) {
   const minTime = sortedOpportunities.length > 0 ? sortedOpportunities[0].timestamp : new Date();
   const maxTime = sortedOpportunities.length > 0 ? sortedOpportunities[sortedOpportunities.length - 1].timestamp : new Date();
   const timeRange = sortedOpportunities.length > 0 ? maxTime.getTime() - minTime.getTime() : 0;
+
+  // 计算价格曲线坐标
+  const priceCurvePoints = React.useMemo(() => {
+    if (!priceData || priceData.length === 0 || timeRange === 0) return [];
+    
+    // 过滤出在时间范围内的价格数据
+    const filteredPrices = priceData.filter(p => {
+      const priceTime = p.timestamp.getTime();
+      return priceTime >= minTime.getTime() && priceTime <= maxTime.getTime();
+    });
+    
+    if (filteredPrices.length === 0) return [];
+    
+    // 计算价格范围
+    const prices = filteredPrices.map(p => p.price);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const priceRange = maxPrice - minPrice || 1;
+    
+    // 价格曲线绘制在图表上方，使用顶部80%的空间
+    const priceAreaTop = 20;
+    const priceAreaHeight = (dimensions.height - 40 - priceAreaTop) * 0.8;
+    const priceAreaBottom = priceAreaTop + priceAreaHeight;
+    
+    // 计算每个价格点的坐标
+    const padding = 60;
+    const chartWidth = dimensions.width - padding * 2;
+    return filteredPrices.map(p => {
+      // 直接计算X坐标，避免依赖getX函数
+      let x = padding;
+      if (timeRange > 0) {
+        const ratio = (p.timestamp.getTime() - minTime.getTime()) / timeRange;
+        const originalX = padding + chartWidth * ratio;
+        x = originalX * scale + panOffset;
+      }
+      const priceRatio = (p.price - minPrice) / priceRange;
+      // Y坐标：价格越高，Y值越小（SVG坐标系）
+      const y = priceAreaBottom - priceRatio * priceAreaHeight;
+      return { x, y, price: p.price, timestamp: p.timestamp };
+    });
+  }, [priceData, minTime, maxTime, timeRange, dimensions.width, dimensions.height, scale, panOffset]);
+  
+  // 计算价格范围（用于Y轴标签）
+  const priceRange = React.useMemo(() => {
+    if (!priceData || priceData.length === 0) return null;
+    const filteredPrices = priceData.filter(p => {
+      const priceTime = p.timestamp.getTime();
+      return priceTime >= minTime.getTime() && priceTime <= maxTime.getTime();
+    });
+    if (filteredPrices.length === 0) return null;
+    const prices = filteredPrices.map(p => p.price);
+    return {
+      min: Math.min(...prices),
+      max: Math.max(...prices),
+      range: Math.max(...prices) - Math.min(...prices) || 1
+    };
+  }, [priceData, minTime, maxTime]);
 
   // 计算利润率范围（用于颜色映射）
   const profitRates = sortedOpportunities.map(opp => opp.profit_rate);
@@ -1207,6 +1330,77 @@ function TimelineVisualization({ opportunities, onHover, hoveredOpportunity }) {
           onMouseEnter={() => setIsHoveringTimeline(true)}
           onMouseLeave={() => setIsHoveringTimeline(false)}
         >
+          {/* ETH价格趋势曲线 */}
+          {priceCurvePoints.length > 0 && (() => {
+            // 构建路径字符串
+            const pathData = priceCurvePoints
+              .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+              .join(' ');
+            
+            // 计算价格区域
+            const priceAreaTop = 20;
+            const priceAreaHeight = (dimensions.height - 40 - priceAreaTop) * 0.8;
+            const priceAreaBottom = priceAreaTop + priceAreaHeight;
+            
+            return (
+              <g>
+                {/* 价格曲线 */}
+                <path
+                  d={pathData}
+                  fill="none"
+                  stroke="#8b5cf6"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.8"
+                />
+                {/* 价格曲线填充区域（渐变） */}
+                <defs>
+                  <linearGradient id="priceGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.3" />
+                    <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d={`${pathData} L ${priceCurvePoints[priceCurvePoints.length - 1].x} ${priceAreaBottom} L ${priceCurvePoints[0].x} ${priceAreaBottom} Z`}
+                  fill="url(#priceGradient)"
+                />
+                {/* 价格Y轴标签（右侧） */}
+                {priceRange && (() => {
+                  const ticks = [];
+                  for (let i = 0; i <= 4; i++) {
+                    const price = priceRange.min + (priceRange.range * i) / 4;
+                    const priceRatio = (price - priceRange.min) / priceRange.range;
+                    const y = priceAreaBottom - priceRatio * priceAreaHeight;
+                    ticks.push({ price, y });
+                  }
+                  return ticks.map((tick, index) => (
+                    <g key={`price-tick-${index}`}>
+                      <line
+                        x1={dimensions.width - 60}
+                        y1={tick.y}
+                        x2={dimensions.width - 50}
+                        y2={tick.y}
+                        stroke="#8b5cf6"
+                        strokeWidth="1"
+                        opacity="0.5"
+                      />
+                      <text
+                        x={dimensions.width - 45}
+                        y={tick.y + 4}
+                        fill="#8b5cf6"
+                        fontSize="10"
+                        fontWeight="500"
+                      >
+                        ${tick.price.toFixed(0)}
+                      </text>
+                    </g>
+                  ));
+                })()}
+              </g>
+            );
+          })()}
+
           {/* 时间轴基线 */}
           <line
             x1={getX(minTime)}
@@ -1359,6 +1553,17 @@ function TimelineVisualization({ opportunities, onHover, hoveredOpportunity }) {
           
           return (
             <>
+              {priceCurvePoints.length > 0 && (
+                <div className="legend-item">
+                  <div style={{ 
+                    width: '24px', 
+                    height: '2px', 
+                    background: '#8b5cf6',
+                    borderRadius: '1px'
+                  }}></div>
+                  <span>ETH价格趋势</span>
+                </div>
+              )}
               <div className="legend-item">
                 <div className="legend-dot" style={{ background: '#6366f1', width: '12px', height: '12px', borderRadius: '50%' }}></div>
                 <span>低利润率 (&lt;{formatThreshold(threshold1)}%)</span>
@@ -1385,6 +1590,12 @@ function TimelineVisualization({ opportunities, onHover, hoveredOpportunity }) {
 
 // 数据分析组件
 function OpportunityDataAnalysis({ opportunities }) {
+  const [hoveredBin, setHoveredBin] = React.useState(null);
+  const [hoveredHour, setHoveredHour] = React.useState(null);
+  const [tooltipPos, setTooltipPos] = React.useState({ x: 0, y: 0 });
+  const profitChartRef = React.useRef(null);
+  const timeChartRef = React.useRef(null);
+  
   // 计算统计数据
   const stats = React.useMemo(() => {
     if (opportunities.length === 0) {
@@ -1428,40 +1639,102 @@ function OpportunityDataAnalysis({ opportunities }) {
       range: `${(min + i * binSize).toFixed(1)}% - ${(min + (i + 1) * binSize).toFixed(1)}%`,
       count: 0,
       min: min + i * binSize,
-      max: min + (i + 1) * binSize
+      max: min + (i + 1) * binSize,
+      opportunities: [] // 存储该区间内的所有机会
     }));
     
-    profitRates.forEach(rate => {
+    opportunities.forEach(opp => {
+      const rate = opp.profit_rate || 0;
       const binIndex = Math.min(
         Math.floor((rate - min) / binSize),
         bins - 1
       );
       if (binIndex >= 0 && binIndex < bins) {
         distribution[binIndex].count++;
+        distribution[binIndex].opportunities.push(opp);
       }
     });
     
-    return distribution;
+    // 计算每个区间的统计信息
+    return distribution.map(bin => {
+      if (bin.count === 0) {
+        return {
+          ...bin,
+          avgProfitRate: 0,
+          totalProfit: 0,
+          avgProfit: 0,
+          avgPriceDiff: 0,
+          maxProfit: 0,
+          minProfit: 0
+        };
+      }
+      
+      const profits = bin.opportunities.map(o => o.profit || 0);
+      const rates = bin.opportunities.map(o => o.profit_rate || 0);
+      const priceDiffs = bin.opportunities.map(o => o.price_diff_percent || 0);
+      
+      return {
+        ...bin,
+        avgProfitRate: rates.reduce((a, b) => a + b, 0) / rates.length,
+        totalProfit: profits.reduce((a, b) => a + b, 0),
+        avgProfit: profits.reduce((a, b) => a + b, 0) / profits.length,
+        avgPriceDiff: priceDiffs.reduce((a, b) => a + b, 0) / priceDiffs.length,
+        maxProfit: Math.max(...profits),
+        minProfit: Math.min(...profits)
+      };
+    });
   }, [opportunities]);
 
   // 计算时间分布（按小时）
   const timeDistribution = React.useMemo(() => {
     if (opportunities.length === 0) return [];
     
-    const hourCounts = {};
+    const hourData = {};
     opportunities.forEach(opp => {
       if (opp.timestamp) {
         const date = new Date(opp.timestamp);
         const hour = date.getHours();
-        hourCounts[hour] = (hourCounts[hour] || 0) + 1;
+        if (!hourData[hour]) {
+          hourData[hour] = [];
+        }
+        hourData[hour].push(opp);
       }
     });
     
-    return Array.from({ length: 24 }, (_, hour) => ({
-      hour,
-      count: hourCounts[hour] || 0,
-      label: `${hour}:00`
-    }));
+    return Array.from({ length: 24 }, (_, hour) => {
+      const opps = hourData[hour] || [];
+      const count = opps.length;
+      
+      if (count === 0) {
+        return {
+          hour,
+          count: 0,
+          label: `${hour}:00`,
+          avgProfitRate: 0,
+          totalProfit: 0,
+          avgProfit: 0,
+          avgPriceDiff: 0,
+          maxProfit: 0,
+          minProfit: 0
+        };
+      }
+      
+      const profits = opps.map(o => o.profit || 0);
+      const rates = opps.map(o => o.profit_rate || 0);
+      const priceDiffs = opps.map(o => o.price_diff_percent || 0);
+      
+      return {
+        hour,
+        count,
+        label: `${hour}:00`,
+        avgProfitRate: rates.reduce((a, b) => a + b, 0) / rates.length,
+        totalProfit: profits.reduce((a, b) => a + b, 0),
+        avgProfit: profits.reduce((a, b) => a + b, 0) / profits.length,
+        avgPriceDiff: priceDiffs.reduce((a, b) => a + b, 0) / priceDiffs.length,
+        maxProfit: Math.max(...profits),
+        minProfit: Math.min(...profits)
+      };
+    });
   }, [opportunities]);
 
   const maxDistributionCount = Math.max(...profitRateDistribution.map(d => d.count), 1);
@@ -1513,11 +1786,39 @@ function OpportunityDataAnalysis({ opportunities }) {
       {/* 图表区域 */}
       <div className="charts-grid">
         {/* 利润率分布直方图 */}
-        <div className="chart-container">
+        <div className="chart-container" ref={profitChartRef}>
           <h4 className="chart-title">利润率分布</h4>
           <div className="histogram-chart">
             {profitRateDistribution.map((bin, index) => (
-              <div key={index} className="histogram-bar-container">
+              <div 
+                key={index} 
+                className="histogram-bar-container"
+                onMouseEnter={(e) => {
+                  if (bin.count > 0) {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const containerRect = profitChartRef.current?.getBoundingClientRect();
+                    if (containerRect) {
+                      setTooltipPos({
+                        x: e.clientX - containerRect.left,
+                        y: e.clientY - containerRect.top
+                      });
+                    }
+                    setHoveredBin(bin);
+                  }
+                }}
+                onMouseLeave={() => setHoveredBin(null)}
+                onMouseMove={(e) => {
+                  if (bin.count > 0 && hoveredBin) {
+                    const containerRect = profitChartRef.current?.getBoundingClientRect();
+                    if (containerRect) {
+                      setTooltipPos({
+                        x: e.clientX - containerRect.left,
+                        y: e.clientY - containerRect.top
+                      });
+                    }
+                  }
+                }}
+              >
                 <div 
                   className="histogram-bar"
                   style={{
@@ -1526,7 +1827,6 @@ function OpportunityDataAnalysis({ opportunities }) {
                       ? `hsl(${200 + (bin.count / maxDistributionCount) * 60}, 70%, 50%)`
                       : '#e2e8f0'
                   }}
-                  title={`${bin.range}: ${bin.count} 个机会`}
                 >
                   {bin.count > 0 && (
                     <span className="histogram-count">{bin.count}</span>
@@ -1538,14 +1838,82 @@ function OpportunityDataAnalysis({ opportunities }) {
               </div>
             ))}
           </div>
+          {hoveredBin && hoveredBin.count > 0 && (
+            <div 
+              className="chart-tooltip"
+              style={{
+                left: tooltipPos.x > (profitChartRef.current?.clientWidth || 400) / 2 
+                  ? `${tooltipPos.x - 180}px` 
+                  : `${tooltipPos.x + 20}px`,
+                top: `${Math.max(10, tooltipPos.y - 150)}px`
+              }}
+            >
+              <div className="tooltip-date">{hoveredBin.range}</div>
+              <div className="tooltip-row">
+                <span>机会数量:</span>
+                <span className="font-mono">{hoveredBin.count}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>平均利润率:</span>
+                <span className="font-mono">{formatNumber(hoveredBin.avgProfitRate, 2)}%</span>
+              </div>
+              <div className="tooltip-row">
+                <span>总利润:</span>
+                <span className="font-mono">{formatProfit(hoveredBin.totalProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>平均利润:</span>
+                <span className="font-mono">{formatProfit(hoveredBin.avgProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>最大利润:</span>
+                <span className="font-mono">{formatProfit(hoveredBin.maxProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>最小利润:</span>
+                <span className="font-mono">{formatProfit(hoveredBin.minProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>平均价格差:</span>
+                <span className="font-mono">{formatNumber(hoveredBin.avgPriceDiff, 2)}%</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 时间分布柱状图 */}
-        <div className="chart-container">
+        <div className="chart-container" ref={timeChartRef}>
           <h4 className="chart-title">按小时分布</h4>
           <div className="time-distribution-chart">
             {timeDistribution.map((item, index) => (
-              <div key={index} className="time-bar-container">
+              <div 
+                key={index} 
+                className="time-bar-container"
+                onMouseEnter={(e) => {
+                  if (item.count > 0) {
+                    const containerRect = timeChartRef.current?.getBoundingClientRect();
+                    if (containerRect) {
+                      setTooltipPos({
+                        x: e.clientX - containerRect.left,
+                        y: e.clientY - containerRect.top
+                      });
+                    }
+                    setHoveredHour(item);
+                  }
+                }}
+                onMouseLeave={() => setHoveredHour(null)}
+                onMouseMove={(e) => {
+                  if (item.count > 0 && hoveredHour) {
+                    const containerRect = timeChartRef.current?.getBoundingClientRect();
+                    if (containerRect) {
+                      setTooltipPos({
+                        x: e.clientX - containerRect.left,
+                        y: e.clientY - containerRect.top
+                      });
+                    }
+                  }
+                }}
+              >
                 <div 
                   className="time-bar"
                   style={{
@@ -1554,7 +1922,6 @@ function OpportunityDataAnalysis({ opportunities }) {
                       ? `hsl(${220 + (item.count / maxTimeCount) * 40}, 70%, 50%)`
                       : '#e2e8f0'
                   }}
-                  title={`${item.label}: ${item.count} 个机会`}
                 >
                   {item.count > 0 && (
                     <span className="time-count">{item.count}</span>
@@ -1564,6 +1931,47 @@ function OpportunityDataAnalysis({ opportunities }) {
               </div>
             ))}
           </div>
+          {hoveredHour && hoveredHour.count > 0 && (
+            <div 
+              className="chart-tooltip"
+              style={{
+                left: tooltipPos.x > (timeChartRef.current?.clientWidth || 400) / 2 
+                  ? `${tooltipPos.x - 180}px` 
+                  : `${tooltipPos.x + 20}px`,
+                top: `${Math.max(10, tooltipPos.y - 150)}px`
+              }}
+            >
+              <div className="tooltip-date">{hoveredHour.label}</div>
+              <div className="tooltip-row">
+                <span>机会数量:</span>
+                <span className="font-mono">{hoveredHour.count}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>平均利润率:</span>
+                <span className="font-mono">{formatNumber(hoveredHour.avgProfitRate, 2)}%</span>
+              </div>
+              <div className="tooltip-row">
+                <span>总利润:</span>
+                <span className="font-mono">{formatProfit(hoveredHour.totalProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>平均利润:</span>
+                <span className="font-mono">{formatProfit(hoveredHour.avgProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>最大利润:</span>
+                <span className="font-mono">{formatProfit(hoveredHour.maxProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>最小利润:</span>
+                <span className="font-mono">{formatProfit(hoveredHour.minProfit)}</span>
+              </div>
+              <div className="tooltip-row">
+                <span>平均价格差:</span>
+                <span className="font-mono">{formatNumber(hoveredHour.avgPriceDiff, 2)}%</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
