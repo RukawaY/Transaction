@@ -77,6 +77,89 @@ function ArbitrageAnalysis() {
   const [hoveredOpportunity, setHoveredOpportunity] = useState(null);
   const [tooltipPosition, setTooltipPosition] = useState({ x: 0, y: 0 });
 
+  const algorithmSteps = [
+    {
+      title: '数据对齐与清洗',
+      description: '同步 Uniswap 与 Binance 的时间序列，剔除异常值与重复成交，保证对比口径一致。'
+    },
+    {
+      title: '价差与成本计算',
+      description: '计算 DEX/CEX 实时价差，并叠加滑点、手续费、Gas 等成本，得到净价差。'
+    },
+    {
+      title: '机会筛选与方向判定',
+      description: '当净价差超过阈值时，标注套利方向（CEX→DEX / DEX→CEX）并记录信号强度。'
+    },
+    {
+      title: '收益估算与跟踪',
+      description: '以成交量与时间窗口为约束，估算潜在利润并监控机会的持续时间与回撤风险。'
+    }
+  ];
+
+  const directionStats = React.useMemo(() => {
+    const total = opportunities.length;
+    if (!total) {
+      return {
+        total: 0,
+        cexToDex: 0,
+        dexToCex: 0,
+        cexPercent: 0,
+        dexPercent: 0
+      };
+    }
+
+    const cexToDex = opportunities.filter(opp => opp.direction === 'cex->dex').length;
+    const dexToCex = total - cexToDex;
+
+    return {
+      total,
+      cexToDex,
+      dexToCex,
+      cexPercent: (cexToDex / total) * 100,
+      dexPercent: (dexToCex / total) * 100
+    };
+  }, [opportunities]);
+
+  const cumulativeProfitChart = React.useMemo(() => {
+    if (opportunities.length < 2) return null;
+    const sorted = [...opportunities].sort(
+      (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
+    );
+
+    let cumulative = 0;
+    const points = sorted.map((opp, index) => {
+      cumulative += Number(opp.profit || 0);
+      return {
+        x: (index / (sorted.length - 1)) * 100,
+        value: cumulative
+      };
+    });
+
+    const values = points.map(point => point.value);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const height = 60;
+    const padding = 6;
+
+    const path = points
+      .map(point => {
+        const y =
+          height -
+          padding -
+          ((point.value - min) / range) * (height - padding * 2);
+        return `${point.x},${y}`;
+      })
+      .join(' L ');
+
+    return {
+      linePath: `M${path}`,
+      min,
+      max,
+      latest: values[values.length - 1]
+    };
+  }, [opportunities]);
+
   // 获取统计数据
   const fetchStatistics = async () => {
     try {
@@ -201,6 +284,10 @@ function ArbitrageAnalysis() {
     }
   };
 
+  const directionGradient = directionStats.total
+    ? `conic-gradient(#6366f1 0 ${directionStats.cexPercent}%, #a855f7 ${directionStats.cexPercent}% 100%)`
+    : 'conic-gradient(#e2e8f0 0 100%)';
+
   return (
     <div className="page-container">
       {/* Hero Section - Full Screen */}
@@ -257,6 +344,110 @@ function ArbitrageAnalysis() {
       {/* Content Section */}
       <section className="content-section">
         <div className="content-wrapper">
+          <div className="analysis-overview">
+            <h2 className="section-title">套利算法概览</h2>
+            <p className="section-subtitle">
+              通过四步流程识别非原子套利信号，并估算潜在收益与方向分布。
+            </p>
+            <div className="overview-grid">
+              <div className="overview-steps">
+                {algorithmSteps.map((step, index) => (
+                  <div className="overview-step-card" key={step.title}>
+                    <div className="step-index">
+                      {String(index + 1).padStart(2, '0')}
+                    </div>
+                    <div className="step-content">
+                      <h4>{step.title}</h4>
+                      <p>{step.description}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="overview-panels">
+                <div className="overview-panel">
+                  <div className="overview-panel-header">
+                    <h3>套利方向分布</h3>
+                    <span className="overview-tag">{directionStats.total} 次</span>
+                  </div>
+                  <div className="direction-chart">
+                    <div
+                      className="direction-donut"
+                      style={{ background: directionGradient }}
+                    ></div>
+                    <div className="direction-legend">
+                      <div className="legend-row">
+                        <span
+                          className="legend-dot"
+                          style={{ background: '#6366f1' }}
+                        ></span>
+                        <span>
+                          CEX→DEX {directionStats.cexToDex} (
+                          {formatNumber(directionStats.cexPercent, 1)}%)
+                        </span>
+                      </div>
+                      <div className="legend-row">
+                        <span
+                          className="legend-dot"
+                          style={{ background: '#a855f7' }}
+                        ></span>
+                        <span>
+                          DEX→CEX {directionStats.dexToCex} (
+                          {formatNumber(directionStats.dexPercent, 1)}%)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overview-panel">
+                  <div className="overview-panel-header">
+                    <h3>累计利润轨迹</h3>
+                    <span className="overview-tag">
+                      {cumulativeProfitChart
+                        ? `${formatNumber(cumulativeProfitChart.latest, 2)} USDT`
+                        : '--'}
+                    </span>
+                  </div>
+                  <div className="sparkline">
+                    {cumulativeProfitChart ? (
+                      <svg viewBox="0 0 100 60" preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient
+                            id="profitLine"
+                            x1="0"
+                            y1="0"
+                            x2="1"
+                            y2="0"
+                          >
+                            <stop offset="0%" stopColor="#6366f1" />
+                            <stop offset="100%" stopColor="#a855f7" />
+                          </linearGradient>
+                        </defs>
+                        <path
+                          d={cumulativeProfitChart.linePath}
+                          fill="none"
+                          stroke="url(#profitLine)"
+                          strokeWidth="2"
+                        />
+                      </svg>
+                    ) : (
+                      <div className="sparkline-empty">暂无累计利润数据</div>
+                    )}
+                  </div>
+                  <div className="sparkline-footer">
+                    <span>
+                      最小 {cumulativeProfitChart ? formatNumber(cumulativeProfitChart.min, 2) : '--'}
+                    </span>
+                    <span>
+                      最大 {cumulativeProfitChart ? formatNumber(cumulativeProfitChart.max, 2) : '--'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* 套利机会可视化 */}
           <div className="opportunities-visualization">
             <h2 className="section-title">套利机会识别</h2>
@@ -1979,4 +2170,3 @@ function OpportunityDataAnalysis({ opportunities }) {
 }
 
 export default ArbitrageAnalysis;
-

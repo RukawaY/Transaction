@@ -55,6 +55,28 @@ const PriceDashboard = () => {
       });
   };
 
+  const compactFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat("zh-CN", {
+        notation: "compact",
+        maximumFractionDigits: 2,
+      }),
+    []
+  );
+
+  const formatNumber = (value, decimals = 2) => {
+    if (!Number.isFinite(value)) return "--";
+    return value.toLocaleString("zh-CN", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  };
+
+  const formatCompact = (value) => {
+    if (!Number.isFinite(value)) return "--";
+    return compactFormatter.format(value);
+  };
+
   const fetchBackendData = async () => {
     const response = await fetch(`${API_BASE_URL}/api/price-data`);
     if (!response.ok) throw new Error(`后端返回错误: ${response.status}`);
@@ -462,6 +484,152 @@ const PriceDashboard = () => {
     };
   }, [activeData, hoveredItem, dataSource, chartMetrics]);
 
+  const summaryMetrics = useMemo(() => {
+    const uniswap = priceData?.uniswap || [];
+    if (!uniswap.length) return null;
+
+    const binance = priceData?.binance || [];
+    const latest = uniswap[uniswap.length - 1];
+    const previous = uniswap[uniswap.length - 2] || latest;
+    const change = latest.close - previous.close;
+    const changePercent = previous.close
+      ? (change / previous.close) * 100
+      : 0;
+    const recent = uniswap.slice(-30);
+    const closes = recent.map((d) => d.close);
+    const highs = recent.map((d) => d.high);
+    const lows = recent.map((d) => d.low);
+    const volumeSum = recent.reduce((sum, d) => sum + d.volume, 0);
+    const avgVolume = volumeSum / Math.max(recent.length, 1);
+
+    const mean =
+      closes.reduce((sum, val) => sum + val, 0) / Math.max(closes.length, 1);
+    const variance =
+      closes.reduce((sum, val) => sum + (val - mean) ** 2, 0) /
+      Math.max(closes.length, 1);
+    const volatility = Math.sqrt(variance);
+
+    const latestBin = binance.length ? binance[binance.length - 1] : null;
+    const spread = latestBin ? latest.close - latestBin.close : null;
+    const spreadPercent = latestBin
+      ? (spread / latestBin.close) * 100
+      : null;
+
+    return {
+      latest,
+      previous,
+      high30: Math.max(...highs),
+      low30: Math.min(...lows),
+      volumeSum,
+      avgVolume,
+      volatility,
+      spread,
+      spreadPercent,
+      latestBin,
+      change,
+      changePercent,
+    };
+  }, [priceData]);
+
+  const trendChart = useMemo(() => {
+    const series = priceData?.uniswap?.slice(-30) || [];
+    if (series.length < 2) return null;
+
+    const values = series.map((d) => d.close);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;
+    const height = 60;
+    const padding = 6;
+
+    const points = values.map((value, index) => {
+      const x = (index / (values.length - 1)) * 100;
+      const y =
+        height -
+        padding -
+        ((value - min) / range) * (height - padding * 2);
+      return { x, y };
+    });
+
+    const linePath = `M${points.map((p) => `${p.x},${p.y}`).join(" L")}`;
+    const areaPath = `${linePath} L 100 ${height} L 0 ${height} Z`;
+    const change = values[values.length - 1] - values[0];
+    const changePercent = values[0] ? (change / values[0]) * 100 : 0;
+
+    return {
+      linePath,
+      areaPath,
+      min,
+      max,
+      change,
+      changePercent,
+      startLabel: series[0]?.displayTime,
+      endLabel: series[series.length - 1]?.displayTime,
+    };
+  }, [priceData]);
+
+  const volumePulse = useMemo(() => {
+    const series = priceData?.uniswap?.slice(-36) || [];
+    if (!series.length) return null;
+
+    const bucketCount = Math.min(12, series.length);
+    const size = Math.ceil(series.length / bucketCount);
+    const buckets = [];
+
+    for (let i = 0; i < series.length; i += size) {
+      const chunk = series.slice(i, i + size);
+      const total = chunk.reduce((sum, d) => sum + d.volume, 0);
+      buckets.push({
+        value: total,
+        label: chunk[chunk.length - 1]?.displayTime || "",
+      });
+    }
+
+    const max = Math.max(...buckets.map((b) => b.value), 1);
+
+    return {
+      buckets,
+      max,
+    };
+  }, [priceData]);
+
+  const spreadTrend = useMemo(() => {
+    const uniswap = priceData?.uniswap || [];
+    const binance = priceData?.binance || [];
+    const length = Math.min(30, uniswap.length, binance.length);
+
+    if (length < 2) return null;
+
+    const uniSlice = uniswap.slice(-length);
+    const binSlice = binance.slice(-length);
+    const spreads = uniSlice.map((u, idx) => u.close - binSlice[idx].close);
+    const min = Math.min(...spreads);
+    const max = Math.max(...spreads);
+    const range = max - min || 1;
+    const height = 60;
+    const padding = 6;
+
+    const points = spreads.map((value, index) => {
+      const x = (index / (spreads.length - 1)) * 100;
+      const y =
+        height -
+        padding -
+        ((value - min) / range) * (height - padding * 2);
+      return { x, y };
+    });
+
+    const linePath = `M${points.map((p) => `${p.x},${p.y}`).join(" L")}`;
+    const avg = spreads.reduce((sum, val) => sum + val, 0) / spreads.length;
+
+    return {
+      linePath,
+      min,
+      max,
+      avg,
+      current: spreads[spreads.length - 1],
+    };
+  }, [priceData]);
+
   const snapX = hoveredItem ? hoveredItem.x : mousePos.x;
 
   // 注意：不再整个页面 Loading，而是在 Chart 区域处理 Loading 状态或允许透明刷新
@@ -470,511 +638,767 @@ const PriceDashboard = () => {
     return <div className="loading-screen">Loading Market Data...</div>;
 
   return (
-    <div className="dashboard-container">
+    <div className="price-dashboard-page">
       {notice && <div className="notice-bar">{notice}</div>}
 
-      <header className="dashboard-header">
-        <div className="pair-info-group">
-          <div className="coin-icon">ETH</div>
-          <div className="coin-details">
-            <h2 className="pair-title">ETH / USDT</h2>
-            <div className="tags">
-              {dataSource === "comparison" ? (
-                <>
-                  <span className="tag-source" style={{ color: "#6366f1" }}>
-                    Uniswap
-                  </span>
-                  <span
-                    className="tag-source"
-                    style={{ color: "#f0b90b", marginLeft: 4 }}
-                  >
-                    Binance
-                  </span>
-                </>
-              ) : (
-                <span className="tag-source">
-                  {dataSource === "uniswap" ? "Uniswap V3" : "Binance"}
-                </span>
-              )}
+      <section className="price-hero">
+        <div className="price-hero-content">
+          <div className="hero-badges">
+            <span className="hero-badge">ETH / USDT</span>
+            <span className="hero-badge ghost">
+              {USE_BACKEND ? "Live Backend" : "Mock Stream"}
+            </span>
+          </div>
+          <h1 className="price-hero-title">价格看板</h1>
+          <p className="price-hero-subtitle">
+            对比 Uniswap V3 与 Binance 的即时成交价格，捕捉价差与波动节奏。
+          </p>
+
+          <div className="hero-metrics">
+            <div className="hero-metric-card">
+              <span className="hero-metric-label">最新成交价 (Uniswap)</span>
+              <span className="hero-metric-main">
+                ${summaryMetrics ? formatNumber(summaryMetrics.latest.close) : "--"}
+              </span>
+              <span
+                className={`hero-metric-sub ${
+                  summaryMetrics &&
+                  summaryMetrics.change >= 0
+                    ? "text-up"
+                    : "text-down"
+                }`}
+              >
+                {summaryMetrics
+                  ? `${summaryMetrics.change >= 0 ? "+" : ""}${formatNumber(
+                      summaryMetrics.change
+                    )} (${formatNumber(summaryMetrics.changePercent, 2)}%)`
+                  : "--"}
+              </span>
             </div>
+            <div className="hero-metric-card">
+              <span className="hero-metric-label">近30日价格区间</span>
+              <span className="hero-metric-main">
+                {summaryMetrics
+                  ? `$${formatNumber(summaryMetrics.low30, 2)} - $${formatNumber(
+                      summaryMetrics.high30,
+                      2
+                    )}`
+                  : "--"}
+              </span>
+              <span className="hero-metric-sub">
+                波动率 {summaryMetrics ? formatNumber(summaryMetrics.volatility, 2) : "--"}
+              </span>
+            </div>
+            <div className="hero-metric-card">
+              <span className="hero-metric-label">当前价差 (Uni - Bin)</span>
+              <span
+                className={`hero-metric-main ${
+                  summaryMetrics && summaryMetrics.spread !== null
+                    ? summaryMetrics.spread >= 0
+                      ? "text-up"
+                      : "text-down"
+                    : ""
+                }`}
+              >
+                {summaryMetrics && summaryMetrics.spread !== null
+                  ? `${formatNumber(summaryMetrics.spread, 2)}`
+                  : "--"}
+              </span>
+              <span className="hero-metric-sub">
+                {summaryMetrics && summaryMetrics.spreadPercent !== null
+                  ? `${formatNumber(summaryMetrics.spreadPercent, 2)}%`
+                  : "等待对比数据"}
+              </span>
+            </div>
+            <div className="hero-metric-card">
+              <span className="hero-metric-label">近30日成交量</span>
+              <span className="hero-metric-main">
+                {summaryMetrics ? formatCompact(summaryMetrics.volumeSum) : "--"}
+              </span>
+              <span className="hero-metric-sub">
+                日均 {summaryMetrics ? formatCompact(summaryMetrics.avgVolume) : "--"}
+              </span>
+            </div>
+          </div>
+
+          <div className="hero-footnotes">
+            <span>数据源：Uniswap V3 / Binance</span>
+            <span>支持缩放、拖拽、Hover 提示</span>
           </div>
         </div>
 
-        {displayStats && (
-          <div className="stats-group">
-            {displayStats.mode === "compare" ? (
-              <>
-                <div className="stat-block">
-                  <span className="stat-label">Spread</span>
-                  <span
-                    className={`current-price ${
-                      displayStats.spread >= 0 ? "text-up" : "text-down"
-                    }`}
-                  >
-                    {displayStats.spread.toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">Uniswap</span>
-                  <span className="stat-value" style={{ color: "#6366f1" }}>
-                    ${displayStats.uniPrice.toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">Binance</span>
-                  <span className="stat-value" style={{ color: "#f0b90b" }}>
-                    ${displayStats.binPrice.toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">Date</span>
-                  <span className="stat-value text-bright">
-                    {displayStats.timestamp.slice(5, 10)}
-                  </span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="stat-block">
-                  <span className="stat-label">Price</span>
-                  <span
-                    className={`current-price ${
-                      displayStats.isRising ? "text-up" : "text-down"
-                    }`}
-                  >
-                    ${displayStats.price.toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">Change</span>
-                  <span
-                    className={`stat-value ${
-                      displayStats.isRising ? "text-up" : "text-down"
-                    }`}
-                  >
-                    {displayStats.change >= 0 ? "+" : ""}
-                    {displayStats.change.toFixed(2)} (
-                    {displayStats.changePercent.toFixed(2)}%)
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">High</span>
-                  <span className="stat-value text-bright">
-                    ${displayStats.high.toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">Low</span>
-                  <span className="stat-value text-bright">
-                    ${displayStats.low.toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-block">
-                  <span className="stat-label">Vol</span>
-                  <span className="stat-value text-bright">
-                    {displayStats.volume.toFixed(0)}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </header>
+        <div className="scroll-indicator">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M12 5V19M12 19L5 12M12 19L19 12"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span>向下滑动查看更多</span>
+        </div>
+      </section>
 
-      <main className="dashboard-main">
-        <section className="chart-card">
-          <div className="chart-toolbar">
-            <div className="toolbar-group">
-              <span className="toolbar-label">Time</span>
-              <div className="time-btns">
-                {[30, 90, 180].map((d) => (
-                  <button
-                    key={d}
-                    onClick={() =>
-                      setViewState({ start: fullData.length - d, count: d })
-                    }
-                    className={`time-btn ${
-                      viewState.count === d ? "active" : ""
-                    }`}
-                  >
-                    {d}D
-                  </button>
-                ))}
-              </div>
+      <div className="price-transition" aria-hidden="true"></div>
 
-              <div
-                style={{
-                  marginLeft: "12px",
-                  borderLeft: "1px solid var(--border-color)",
-                  paddingLeft: "12px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                }}
-              >
-                <input
-                  type="date"
-                  className="date-picker-input"
-                  onChange={handleDateChange}
-                  max={new Date().toISOString().split("T")[0]}
-                />
-
-                {/* --- 新增刷新按钮 --- */}
-                <button
-                  className={`refresh-btn ${loading ? "spinning" : ""}`}
-                  onClick={fetchData}
-                  title="Refresh Data"
-                  disabled={loading}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M23 4v6h-6"></path>
-                    <path d="M1 20v-6h6"></path>
-                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="toolbar-group">
-              <div className="segmented-control">
-                <button
-                  className={dataSource === "uniswap" ? "active-uni" : ""}
-                  onClick={() => setDataSource("uniswap")}
-                >
-                  Uniswap
-                </button>
-                <div className="divider"></div>
-                <button
-                  className={dataSource === "binance" ? "active-bin" : ""}
-                  onClick={() => setDataSource("binance")}
-                >
-                  Binance
-                </button>
-                <div className="divider"></div>
-                <button
-                  className={dataSource === "comparison" ? "active-comp" : ""}
-                  onClick={() => setDataSource("comparison")}
-                >
-                  Trend & Spread
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div
-            className="chart-area"
-            ref={containerRef}
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseLeave}
-            style={{ userSelect: "none" }}
-          >
-            <svg width="100%" height="100%" className="chart-svg">
-              {yTicks.map((t, i) => (
-                <g key={i}>
-                  <line
-                    x1="0"
-                    y1={t.y}
-                    x2="100%"
-                    y2={t.y}
-                    className="grid-line"
-                  />
-                  <text
-                    x={dimensions.width - 6}
-                    y={t.y - 4}
-                    className="axis-label"
-                  >
-                    {t.val.toFixed(0)}
-                  </text>
-                </g>
-              ))}
-
-              {dataSource === "comparison" ? (
-                <>
-                  <line
-                    x1="0"
-                    y1={spreadZeroY}
-                    x2="100%"
-                    y2={spreadZeroY}
-                    stroke="#444"
-                    strokeDasharray="2 2"
-                  />
-                  {points.map((p) => (
-                    <g key={`spread-${p.id}`}>
-                      <rect
-                        x={p.x - p.width / 2}
-                        y={
-                          p.spreadH >= 0 ? spreadZeroY - p.spreadH : spreadZeroY
-                        }
-                        width={p.width}
-                        height={Math.max(1, Math.abs(p.spreadH))}
-                        fill={
-                          p.spread >= 0
-                            ? "var(--color-up)"
-                            : "var(--color-down)"
-                        }
-                        opacity={0.6}
-                      />
-                    </g>
-                  ))}
-                  <text x="10" y={spreadZeroY - 10} fill="#888" fontSize="10">
-                    Spread (Uni - Bin)
-                  </text>
-                  <path
-                    d={getLinePath(points, "yUni")}
-                    fill="none"
-                    stroke="#6366f1"
-                    strokeWidth="2"
-                  />
-                  <path
-                    d={getLinePath(points, "yBin")}
-                    fill="none"
-                    stroke="#f0b90b"
-                    strokeWidth="2"
-                  />
-                </>
-              ) : (
-                points.map((p) => (
-                  <g key={p.id}>
-                    <line
-                      x1={p.x}
-                      y1={p.yHigh}
-                      x2={p.x}
-                      y2={p.yLow}
-                      className={p.isRising ? "stroke-up" : "stroke-down"}
-                    />
-                    <rect
-                      x={p.x - p.width / 2}
-                      y={Math.min(p.yOpen, p.yClose)}
-                      width={p.width}
-                      height={Math.max(1, Math.abs(p.yOpen - p.yClose))}
-                      className={p.isRising ? "fill-up" : "fill-down"}
-                      shapeRendering="crispEdges"
-                    />
-                  </g>
-                ))
-              )}
-
-              {points.map((p) => (
-                <rect
-                  key={`hit-${p.id}`}
-                  x={p.xStart}
-                  y="0"
-                  width={dimensions.width / points.length}
-                  height="100%"
-                  fill="transparent"
-                  onMouseEnter={() => !isDragging && setHoveredItem(p)}
-                />
-              ))}
-
-              {mousePos.active && !isDragging && (
-                <>
-                  <line
-                    x1={snapX}
-                    y1="0"
-                    x2={snapX}
-                    y2="100%"
-                    className="crosshair-line"
-                  />
-                  <line
-                    x1="0"
-                    y1={mousePos.y}
-                    x2="100%"
-                    y2={mousePos.y}
-                    className="crosshair-line"
-                  />
-
-                  {cursorPrice && (
-                    <g
-                      transform={`translate(${dimensions.width - 55}, ${
-                        mousePos.y
-                      })`}
-                    >
-                      <rect
-                        x="0"
-                        y="-10"
-                        width="55"
-                        height="20"
-                        className="axis-cursor-label-bg"
-                      />
-                      <text x="27.5" y="1" className="axis-cursor-label-text">
-                        {cursorPrice.toFixed(2)}
-                      </text>
-                    </g>
-                  )}
-                </>
-              )}
-            </svg>
-
-            {mousePos.active && !isDragging && hoveredItem && (
-              <div
-                className="floating-tooltip"
-                style={{
-                  left: snapX > dimensions.width / 2 ? snapX - 180 : snapX + 20,
-                  top:
-                    mousePos.y > dimensions.height / 2
-                      ? mousePos.y - 150
-                      : mousePos.y + 10,
-                }}
-              >
-                <div className="tooltip-date">{hoveredItem.timestamp}</div>
-                {dataSource === "comparison" ? (
-                  <>
-                    <div className="tooltip-row" style={{ color: "#6366f1" }}>
-                      <span>Uniswap:</span>
-                      <span className="font-mono">
-                        {hoveredItem.uniClose.toFixed(2)}
+      <section className="price-market">
+        <div className="dashboard-container">
+          <header className="dashboard-header">
+            <div className="pair-info-group">
+              <div className="coin-icon">ETH</div>
+              <div className="coin-details">
+                <h2 className="pair-title">ETH / USDT</h2>
+                <div className="tags">
+                  {dataSource === "comparison" ? (
+                    <>
+                      <span className="tag-source" style={{ color: "#6366f1" }}>
+                        Uniswap
                       </span>
-                    </div>
-                    <div className="tooltip-row" style={{ color: "#f0b90b" }}>
-                      <span>Binance:</span>
-                      <span className="font-mono">
-                        {hoveredItem.binClose.toFixed(2)}
-                      </span>
-                    </div>
-                    <div
-                      className="tooltip-row"
-                      style={{
-                        borderTop: "1px solid #333",
-                        marginTop: 4,
-                        paddingTop: 4,
-                      }}
-                    >
-                      <span>Spread:</span>
                       <span
-                        className={`font-mono ${
-                          hoveredItem.spread >= 0 ? "text-up" : "text-down"
+                        className="tag-source"
+                        style={{ color: "#f0b90b", marginLeft: 4 }}
+                      >
+                        Binance
+                      </span>
+                    </>
+                  ) : (
+                    <span className="tag-source">
+                      {dataSource === "uniswap" ? "Uniswap V3" : "Binance"}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {displayStats && (
+              <div className="stats-group">
+                {displayStats.mode === "compare" ? (
+                  <>
+                    <div className="stat-block">
+                      <span className="stat-label">Spread</span>
+                      <span
+                        className={`current-price ${
+                          displayStats.spread >= 0 ? "text-up" : "text-down"
                         }`}
                       >
-                        {hoveredItem.spread.toFixed(2)}
+                        {displayStats.spread.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">Uniswap</span>
+                      <span className="stat-value" style={{ color: "#6366f1" }}>
+                        ${displayStats.uniPrice.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">Binance</span>
+                      <span className="stat-value" style={{ color: "#f0b90b" }}>
+                        ${displayStats.binPrice.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">Date</span>
+                      <span className="stat-value text-bright">
+                        {displayStats.timestamp.slice(5, 10)}
                       </span>
                     </div>
                   </>
                 ) : (
                   <>
-                    <div className="tooltip-row">
-                      <span>Open:</span>
-                      <span className="font-mono">
-                        {hoveredItem.open.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="tooltip-row">
-                      <span>High:</span>
-                      <span className="font-mono">
-                        {hoveredItem.high.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="tooltip-row">
-                      <span>Low:</span>
-                      <span className="font-mono">
-                        {hoveredItem.low.toFixed(2)}
-                      </span>
-                    </div>
-                    <div className="tooltip-row">
-                      <span>Close:</span>
+                    <div className="stat-block">
+                      <span className="stat-label">Price</span>
                       <span
-                        className={`font-mono ${
-                          hoveredItem.isRising ? "text-up" : "text-down"
+                        className={`current-price ${
+                          displayStats.isRising ? "text-up" : "text-down"
                         }`}
                       >
-                        {hoveredItem.close.toFixed(2)}
+                        ${displayStats.price.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">Change</span>
+                      <span
+                        className={`stat-value ${
+                          displayStats.isRising ? "text-up" : "text-down"
+                        }`}
+                      >
+                        {displayStats.change >= 0 ? "+" : ""}
+                        {displayStats.change.toFixed(2)} (
+                        {displayStats.changePercent.toFixed(2)}%)
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">High</span>
+                      <span className="stat-value text-bright">
+                        ${displayStats.high.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">Low</span>
+                      <span className="stat-value text-bright">
+                        ${displayStats.low.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="stat-block">
+                      <span className="stat-label">Vol</span>
+                      <span className="stat-value text-bright">
+                        {displayStats.volume.toFixed(0)}
                       </span>
                     </div>
                   </>
                 )}
               </div>
             )}
+          </header>
 
-            <div className="x-axis">
-              {points
-                .filter((_, i) => i % Math.ceil(points.length / 6) === 0)
-                .map((p) => (
-                  <span key={p.id} style={{ left: p.x }}>
-                    {p.displayTime}
-                  </span>
-                ))}
-            </div>
-          </div>
-        </section>
+          <main className="dashboard-main">
+            <section className="chart-card">
+              <div className="chart-toolbar">
+                <div className="toolbar-group">
+                  <span className="toolbar-label">Time</span>
+                  <div className="time-btns">
+                    {[30, 90, 180].map((d) => (
+                      <button
+                        key={d}
+                        onClick={() =>
+                          setViewState({ start: fullData.length - d, count: d })
+                        }
+                        className={`time-btn ${
+                          viewState.count === d ? "active" : ""
+                        }`}
+                      >
+                        {d}D
+                      </button>
+                    ))}
+                  </div>
 
-        <aside className="table-card">
-          <div className="table-header">
-            <h3>
-              {dataSource === "comparison"
-                ? "Spread Analysis"
-                : "Market Trades"}
-            </h3>
-          </div>
-          <div className="table-body">
-            <table>
-              <thead>
-                <tr>
-                  <th className="text-left">Time</th>
-                  <th className="text-right">
-                    {dataSource === "comparison" ? "Spread" : "Price"}
-                  </th>
-                  <th className="text-right">
-                    {dataSource === "comparison" ? "Uni Price" : "Amount"}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...activeData].reverse().map((row) => (
-                  <tr
-                    key={row.id}
-                    className={
-                      hoveredItem && hoveredItem.id === row.id
-                        ? "row-hover"
-                        : ""
-                    }
-                    onMouseEnter={() => setHoveredItem(row)}
+                  <div
+                    style={{
+                      marginLeft: "12px",
+                      borderLeft: "1px solid var(--border-color)",
+                      paddingLeft: "12px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
                   >
-                    <td className="text-left text-dim">{row.displayTime}</td>
+                    <input
+                      type="date"
+                      className="date-picker-input"
+                      onChange={handleDateChange}
+                      max={new Date().toISOString().split("T")[0]}
+                    />
+
+                    <button
+                      className={`refresh-btn ${loading ? "spinning" : ""}`}
+                      onClick={fetchData}
+                      title="Refresh Data"
+                      disabled={loading}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M23 4v6h-6"></path>
+                        <path d="M1 20v-6h6"></path>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="toolbar-group">
+                  <div className="segmented-control">
+                    <button
+                      className={dataSource === "uniswap" ? "active-uni" : ""}
+                      onClick={() => setDataSource("uniswap")}
+                    >
+                      Uniswap
+                    </button>
+                    <div className="divider"></div>
+                    <button
+                      className={dataSource === "binance" ? "active-bin" : ""}
+                      onClick={() => setDataSource("binance")}
+                    >
+                      Binance
+                    </button>
+                    <div className="divider"></div>
+                    <button
+                      className={
+                        dataSource === "comparison" ? "active-comp" : ""
+                      }
+                      onClick={() => setDataSource("comparison")}
+                    >
+                      Trend & Spread
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                className="chart-area"
+                ref={containerRef}
+                onWheel={handleWheel}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseLeave}
+                style={{ userSelect: "none" }}
+              >
+                <svg width="100%" height="100%" className="chart-svg">
+                  {yTicks.map((t, i) => (
+                    <g key={i}>
+                      <line
+                        x1="0"
+                        y1={t.y}
+                        x2="100%"
+                        y2={t.y}
+                        className="grid-line"
+                      />
+                      <text
+                        x={dimensions.width - 6}
+                        y={t.y - 4}
+                        className="axis-label"
+                      >
+                        {t.val.toFixed(0)}
+                      </text>
+                    </g>
+                  ))}
+
+                  {dataSource === "comparison" ? (
+                    <>
+                      <line
+                        x1="0"
+                        y1={spreadZeroY}
+                        x2="100%"
+                        y2={spreadZeroY}
+                        stroke="#444"
+                        strokeDasharray="2 2"
+                      />
+                      {points.map((p) => (
+                        <g key={`spread-${p.id}`}>
+                          <rect
+                            x={p.x - p.width / 2}
+                            y={
+                              p.spreadH >= 0
+                                ? spreadZeroY - p.spreadH
+                                : spreadZeroY
+                            }
+                            width={p.width}
+                            height={Math.max(1, Math.abs(p.spreadH))}
+                            fill={
+                              p.spread >= 0
+                                ? "var(--color-up)"
+                                : "var(--color-down)"
+                            }
+                            opacity={0.6}
+                          />
+                        </g>
+                      ))}
+                      <text x="10" y={spreadZeroY - 10} fill="#888" fontSize="10">
+                        Spread (Uni - Bin)
+                      </text>
+                      <path
+                        d={getLinePath(points, "yUni")}
+                        fill="none"
+                        stroke="#6366f1"
+                        strokeWidth="2"
+                      />
+                      <path
+                        d={getLinePath(points, "yBin")}
+                        fill="none"
+                        stroke="#f0b90b"
+                        strokeWidth="2"
+                      />
+                    </>
+                  ) : (
+                    points.map((p) => (
+                      <g key={p.id}>
+                        <line
+                          x1={p.x}
+                          y1={p.yHigh}
+                          x2={p.x}
+                          y2={p.yLow}
+                          className={p.isRising ? "stroke-up" : "stroke-down"}
+                        />
+                        <rect
+                          x={p.x - p.width / 2}
+                          y={Math.min(p.yOpen, p.yClose)}
+                          width={p.width}
+                          height={Math.max(1, Math.abs(p.yOpen - p.yClose))}
+                          className={p.isRising ? "fill-up" : "fill-down"}
+                          shapeRendering="crispEdges"
+                        />
+                      </g>
+                    ))
+                  )}
+
+                  {points.map((p) => (
+                    <rect
+                      key={`hit-${p.id}`}
+                      x={p.xStart}
+                      y="0"
+                      width={dimensions.width / points.length}
+                      height="100%"
+                      fill="transparent"
+                      onMouseEnter={() => !isDragging && setHoveredItem(p)}
+                    />
+                  ))}
+
+                  {mousePos.active && !isDragging && (
+                    <>
+                      <line
+                        x1={snapX}
+                        y1="0"
+                        x2={snapX}
+                        y2="100%"
+                        className="crosshair-line"
+                      />
+                      <line
+                        x1="0"
+                        y1={mousePos.y}
+                        x2="100%"
+                        y2={mousePos.y}
+                        className="crosshair-line"
+                      />
+
+                      {cursorPrice && (
+                        <g
+                          transform={`translate(${dimensions.width - 55}, ${
+                            mousePos.y
+                          })`}
+                        >
+                          <rect
+                            x="0"
+                            y="-10"
+                            width="55"
+                            height="20"
+                            className="axis-cursor-label-bg"
+                          />
+                          <text x="27.5" y="1" className="axis-cursor-label-text">
+                            {cursorPrice.toFixed(2)}
+                          </text>
+                        </g>
+                      )}
+                    </>
+                  )}
+                </svg>
+
+                {mousePos.active && !isDragging && hoveredItem && (
+                  <div
+                    className="floating-tooltip"
+                    style={{
+                      left:
+                        snapX > dimensions.width / 2 ? snapX - 180 : snapX + 20,
+                      top:
+                        mousePos.y > dimensions.height / 2
+                          ? mousePos.y - 150
+                          : mousePos.y + 10,
+                    }}
+                  >
+                    <div className="tooltip-date">{hoveredItem.timestamp}</div>
                     {dataSource === "comparison" ? (
                       <>
-                        <td
-                          className={`text-right ${
-                            row.spread >= 0 ? "text-up" : "text-down"
-                          }`}
+                        <div className="tooltip-row" style={{ color: "#6366f1" }}>
+                          <span>Uniswap:</span>
+                          <span className="font-mono">
+                            {hoveredItem.uniClose.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="tooltip-row" style={{ color: "#f0b90b" }}>
+                          <span>Binance:</span>
+                          <span className="font-mono">
+                            {hoveredItem.binClose.toFixed(2)}
+                          </span>
+                        </div>
+                        <div
+                          className="tooltip-row"
+                          style={{
+                            borderTop: "1px solid #333",
+                            marginTop: 4,
+                            paddingTop: 4,
+                          }}
                         >
-                          {row.spread.toFixed(2)}
-                        </td>
-                        <td className="text-right text-normal">
-                          {row.uniClose.toFixed(0)}
-                        </td>
+                          <span>Spread:</span>
+                          <span
+                            className={`font-mono ${
+                              hoveredItem.spread >= 0 ? "text-up" : "text-down"
+                            }`}
+                          >
+                            {hoveredItem.spread.toFixed(2)}
+                          </span>
+                        </div>
                       </>
                     ) : (
                       <>
-                        <td
-                          className={`text-right ${
-                            row.close >= row.open ? "text-up" : "text-down"
-                          }`}
-                        >
-                          {row.close.toFixed(2)}
-                        </td>
-                        <td className="text-right text-normal">
-                          {row.volume.toFixed(2)}
-                        </td>
+                        <div className="tooltip-row">
+                          <span>Open:</span>
+                          <span className="font-mono">
+                            {hoveredItem.open.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="tooltip-row">
+                          <span>High:</span>
+                          <span className="font-mono">
+                            {hoveredItem.high.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="tooltip-row">
+                          <span>Low:</span>
+                          <span className="font-mono">
+                            {hoveredItem.low.toFixed(2)}
+                          </span>
+                        </div>
+                        <div className="tooltip-row">
+                          <span>Close:</span>
+                          <span
+                            className={`font-mono ${
+                              hoveredItem.isRising ? "text-up" : "text-down"
+                            }`}
+                          >
+                            {hoveredItem.close.toFixed(2)}
+                          </span>
+                        </div>
                       </>
                     )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  </div>
+                )}
+
+                <div className="x-axis">
+                  {points
+                    .filter((_, i) => i % Math.ceil(points.length / 6) === 0)
+                    .map((p) => (
+                      <span key={p.id} style={{ left: p.x }}>
+                        {p.displayTime}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            </section>
+
+            <aside className="table-card">
+              <div className="table-header">
+                <h3>
+                  {dataSource === "comparison"
+                    ? "Spread Analysis"
+                    : "Market Trades"}
+                </h3>
+              </div>
+              <div className="table-body">
+                <table>
+                  <thead>
+                    <tr>
+                      <th className="text-left">Time</th>
+                      <th className="text-right">
+                        {dataSource === "comparison" ? "Spread" : "Price"}
+                      </th>
+                      <th className="text-right">
+                        {dataSource === "comparison" ? "Uni Price" : "Amount"}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...activeData].reverse().map((row) => (
+                      <tr
+                        key={row.id}
+                        className={
+                          hoveredItem && hoveredItem.id === row.id
+                            ? "row-hover"
+                            : ""
+                        }
+                        onMouseEnter={() => setHoveredItem(row)}
+                      >
+                        <td className="text-left text-dim">{row.displayTime}</td>
+                        {dataSource === "comparison" ? (
+                          <>
+                            <td
+                              className={`text-right ${
+                                row.spread >= 0 ? "text-up" : "text-down"
+                              }`}
+                            >
+                              {row.spread.toFixed(2)}
+                            </td>
+                            <td className="text-right text-normal">
+                              {row.uniClose.toFixed(0)}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td
+                              className={`text-right ${
+                                row.close >= row.open ? "text-up" : "text-down"
+                              }`}
+                            >
+                              {row.close.toFixed(2)}
+                            </td>
+                            <td className="text-right text-normal">
+                              {row.volume.toFixed(2)}
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </aside>
+          </main>
+        </div>
+      </section>
+
+      <section className="price-insights">
+        <div className="price-insights-inner">
+          <div className="price-insights-heading">
+            <h2>关键统计与趋势</h2>
+            <p>用微型图表快速把握价格走势、成交量脉冲与价差节奏。</p>
           </div>
-        </aside>
-      </main>
+
+          <div className="insights-grid">
+            <div className="insight-card">
+              <div className="insight-header">
+                <div>
+                  <h3>近30日价格趋势</h3>
+                  <p>关注趋势强度与阶段性动能。</p>
+                </div>
+                <span
+                  className={`insight-badge ${
+                    trendChart && trendChart.change >= 0 ? "text-up" : "text-down"
+                  }`}
+                >
+                  {trendChart
+                    ? `${trendChart.change >= 0 ? "+" : ""}${formatNumber(
+                        trendChart.change,
+                        2
+                      )} (${formatNumber(trendChart.changePercent, 2)}%)`
+                    : "--"}
+                </span>
+              </div>
+              <div className="insight-chart">
+                {trendChart ? (
+                  <svg viewBox="0 0 100 60" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="rgba(99,102,241,0.45)" />
+                        <stop offset="100%" stopColor="rgba(99,102,241,0)" />
+                      </linearGradient>
+                    </defs>
+                    <path d={trendChart.areaPath} fill="url(#trendFill)" />
+                    <path
+                      d={trendChart.linePath}
+                      fill="none"
+                      stroke="rgba(99,102,241,0.9)"
+                      strokeWidth="2"
+                    />
+                  </svg>
+                ) : (
+                  <div className="insight-empty">暂无趋势数据</div>
+                )}
+              </div>
+              <div className="insight-footer">
+                <span>起点 {trendChart ? trendChart.startLabel : "--"}</span>
+                <span>终点 {trendChart ? trendChart.endLabel : "--"}</span>
+              </div>
+            </div>
+
+            <div className="insight-card">
+              <div className="insight-header">
+                <div>
+                  <h3>成交量脉冲</h3>
+                  <p>识别活跃交易密度与流动性高峰。</p>
+                </div>
+                <span className="insight-badge neutral">
+                  {summaryMetrics ? formatCompact(summaryMetrics.volumeSum) : "--"}
+                </span>
+              </div>
+              <div className="insight-chart mini-bars">
+                {volumePulse ? (
+                  volumePulse.buckets.map((bucket, index) => (
+                    <div key={`${bucket.label}-${index}`} className="mini-bar">
+                      <div
+                        className="mini-bar-fill"
+                        style={{
+                          height: `${(bucket.value / volumePulse.max) * 100}%`,
+                        }}
+                      />
+                      <span className="mini-bar-label">{bucket.label}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="insight-empty">暂无成交量数据</div>
+                )}
+              </div>
+            </div>
+
+            <div className="insight-card">
+              <div className="insight-header">
+                <div>
+                  <h3>价差曲线</h3>
+                  <p>观察 Uniswap 与 Binance 的价差波动。</p>
+                </div>
+                <span
+                  className={`insight-badge ${
+                    spreadTrend && spreadTrend.current >= 0 ? "text-up" : "text-down"
+                  }`}
+                >
+                  {spreadTrend
+                    ? `${formatNumber(spreadTrend.current, 2)} / 平均 ${formatNumber(
+                        spreadTrend.avg,
+                        2
+                      )}`
+                    : "--"}
+                </span>
+              </div>
+              <div className="insight-chart">
+                {spreadTrend ? (
+                  <svg viewBox="0 0 100 60" preserveAspectRatio="none">
+                    <path
+                      d={spreadTrend.linePath}
+                      fill="none"
+                      stroke="rgba(16,185,129,0.9)"
+                      strokeWidth="2"
+                    />
+                  </svg>
+                ) : (
+                  <div className="insight-empty">暂无价差数据</div>
+                )}
+              </div>
+              <div className="insight-footer">
+                <span>
+                  最小 {spreadTrend ? formatNumber(spreadTrend.min, 2) : "--"}
+                </span>
+                <span>
+                  最大 {spreadTrend ? formatNumber(spreadTrend.max, 2) : "--"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="insight-notes">
+            <div>
+              <h4>快速阅读</h4>
+              <ul>
+                <li>趋势曲线展示 30 日收盘走势，便于判断整体方向。</li>
+                <li>成交量脉冲帮助识别高频交易时段与潜在流动性。</li>
+                <li>价差曲线用于对比 CEX/DEX 的即时价差与均值回归。</li>
+              </ul>
+            </div>
+            <div className="insight-callout">
+              <h4>建议关注</h4>
+              <p>
+                当价差持续扩大且成交量同步抬升时，更容易捕捉非原子套利机会。
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 };
