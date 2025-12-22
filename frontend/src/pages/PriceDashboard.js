@@ -1258,7 +1258,7 @@ const PriceDashboard = () => {
         <div className="price-insights-inner">
           <div className="price-insights-heading">
             <h2>关键统计与趋势</h2>
-            <p>用微型图表快速把握价格走势、成交量脉冲与价差节奏。</p>
+            <p>快速把握价格走势、成交量脉冲与价差节奏。</p>
           </div>
 
           <div className="insights-grid">
@@ -1341,7 +1341,7 @@ const PriceDashboard = () => {
               <div className="insight-header">
                 <div>
                   <h3>价差曲线</h3>
-                  <p>观察 Uniswap 与 Binance 的价差波动。</p>
+                  <p>观察ETH/USDT价差波动。</p>
                 </div>
                 <span
                   className={`insight-badge ${

@@ -72,6 +72,37 @@ docker-compose down
 docker-compose down -v
 ```
 
+## 📊 数据爬取与分析
+
+在开始前请确认 `.env` 已配置 `DATABASE_URL` 与 `ETHERSCAN_API_KEY`（必要时调整 `BINANCE_API_URL`）。
+
+**数据爬取（写入数据库）**
+
+```bash
+# Docker 环境（推荐）
+docker-compose exec backend python -m app.scripts.fetch_data
+
+# 本地开发
+cd backend
+python -m app.scripts.fetch_data
+```
+
+**运行数据分析**
+
+```bash
+# 分钟级套利机会（用于时间轴/统计）
+python -m app.scripts.compute_opportunities
+
+# 非原子套利候选识别（用于套利分析页面）
+python -m app.scripts.compute_arbitrage
+```
+
+**一键重置并全量重算（会清空表）**
+
+```bash
+docker-compose exec backend bash app/scripts/reset_recompute.sh
+```
+
 ## 📂 项目结构
 
 ```
