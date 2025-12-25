@@ -1,0 +1,179 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{ctex}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\geometry{a4paper, margin=2.5cm}
+
+\title{非原子区块链交易识别网站 - 项目最终报告}
+\author{开发团队}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{项目概述}
+
+本项目是一个用于识别和分析不同区块链平台间套利机会的网站系统，通过收集并分析来自 \textbf{Uniswap V3} 和 \textbf{Binance} 等平台的交易数据，识别潜在的套利机会，并提供可视化分析界面。系统主要包含价格对比、套利机会识别、以及详细的统计分析功能。
+
+\section{技术架构}
+
+本项目采用微服务架构，主要包括以下组件：
+
+\begin{itemize}
+    \item \textbf{前端 (Frontend)}：使用 \textbf{React} 构建，提供用户界面及数据可视化。
+    \item \textbf{后端 (Backend)}：使用 \textbf{FastAPI} 提供 RESTful API 接口。
+    \item \textbf{数据库 (Database)}：采用 \textbf{PostgreSQL} 作为关系型数据库，用于存储交易和套利数据。
+    \item \textbf{反向代理 (Reverse Proxy)}：使用 \textbf{Nginx} 作为反向代理，负责请求路由。
+    \item \textbf{数据获取 (Data Fetching)}：使用 \textbf{Python} 脚本，用于定期从各平台 API 获取数据。
+\end{itemize}
+
+\section{系统组件详细设计}
+
+\subsection{后端设计}
+
+后端采用 FastAPI 框架，主要包含以下模块：
+
+\subsubsection{数据模型}
+后端定义了四个主要的数据模型：
+
+\begin{itemize}
+    \item \textbf{UniswapSwap}：存储 Uniswap V3 的 Swap 事件，包含交易哈希、时间戳、价格、数量、流动性等字段。
+    \item \textbf{BinanceTrade}：存储 Binance 的成交数据，包含时间戳、价格、数量、开盘价、收盘价等字段。
+    \item \textbf{ArbitrageOpportunity}：存储识别出的套利机会，包含时间戳、价格、利润、利润率、方向等字段。
+    \item \textbf{ArbitrageOpportunityMinute}：按分钟预计算的套利机会，用于识别潜在的套利机会。
+\end{itemize}
+
+\subsubsection{API 接口}
+后端提供以下主要 API 接口：
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{GET /api/health}：健康检查接口，验证后端服务是否正常运行。
+    \item \texttt{GET /api/db-check}：数据库连接检查接口。
+    \item \texttt{GET /api/price-data}：获取 Uniswap V3 和 Binance 的价格数据，按天聚合为 OHLC（开高低收）格式。
+    \item \texttt{GET /api/arbitrage/statistics}：返回预计算的非原子套利统计数据。
+    \item \texttt{GET /api/arbitrage/behaviors}：分页返回识别出的套利行为，支持最小利润过滤和排序。
+    \item \texttt{GET /api/arbitrage/opportunities}：获取预计算的套利机会列表（按分钟），支持最小利润率过滤和时间范围筛选。
+\end{itemize}
+
+\subsection{前端设计}
+
+前端使用 React 框架，主要包含以下页面和组件：
+
+\subsubsection{价格看板 (PriceDashboard.js)}
+价格看板页面提供以下功能：
+
+\begin{itemize}[leftmargin=*]
+    \item 通过 K 线图展示来自多个平台的价格数据。
+    \item 支持切换数据源（Uniswap、Binance 或对比视图）。
+    \item 提供缩放、拖拽、Hover 提示等交互功能。
+    \item 显示关键统计指标，如最新成交价、价格区间、价差、成交量等。
+    \item 支持后端数据和模拟数据切换（通过环境变量 \texttt{REACT\_APP\_USE\_BACKEND} 控制）。
+\end{itemize}
+
+\subsubsection{套利分析 (ArbitrageAnalysis.js)}
+套利分析页面提供以下功能：
+
+\begin{itemize}[leftmargin=*]
+    \item 显示套利统计信息（总机会数、总利润、平均利润率）。
+    \item 提供套利行为列表，支持分页、筛选和排序。
+    \item 时间轴可视化展示套利机会。
+    \item 套利方向分布图表（CEX→DEX / DEX→CEX）。
+    \item 累计利润轨迹图。
+\end{itemize}
+
+\subsection{数据获取与处理}
+
+系统包含多个数据获取和处理脚本：
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{fetch\_data}：从 Uniswap V3 和 Binance API 获取交易数据。
+    \item \texttt{compute\_opportunities}：分析分钟级套利机会。
+    \item \texttt{compute\_arbitrage}：识别非原子套利候选。
+    \item \texttt{reset\_recompute.sh}：一键重置并全量重算脚本。
+\end{itemize}
+
+\section{部署方案}
+
+项目使用 Docker Compose 进行服务编排，包含以下服务：
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{db}：PostgreSQL 数据库服务，使用持久化卷存储数据。
+    \item \textbf{backend}：FastAPI 后端服务，依赖数据库健康检查。
+    \item \textbf{frontend}：React 前端服务，支持热重载。
+    \item \textbf{nginx}：Nginx 反向代理，作为统一入口。
+\end{itemize}
+
+环境变量配置通过 .env 文件管理，包括数据库连接信息、API 密钥等。
+
+\section{技术栈和依赖}
+
+\subsection{后端依赖 (requirements.txt)}
+\begin{itemize}[leftmargin=*]
+    \item fastapi
+    \item uvicorn[standard]
+    \item sqlalchemy
+    \item psycopg2-binary
+    \item python-dotenv
+    \item requests
+\end{itemize}
+
+\subsection{前端依赖 (package.json)}
+\begin{itemize}[leftmargin=*]
+    \item react
+    \item react-dom
+    \item react-router-dom
+    \item react-scripts
+    \item @testing-library/jest-dom
+    \item @testing-library/react
+    \item @testing-library/user-event
+\end{itemize}
+
+\section{系统特点与创新}
+
+\subsection{数据处理能力}
+系统能够处理来自多个平台的高频交易数据，并将其统一为标准的 OHLC 格式，便于对比分析。
+
+\subsection{可视化功能}
+系统提供了丰富的可视化功能，包括价格对比图、套利机会时间轴、方向分布图和累计利润轨迹图。
+
+\subsection{套利算法}
+套利识别算法包含四个步骤：
+\begin{enumerate}[leftmargin=*]
+    \item 数据对齐与清洗：同步 Uniswap 与 Binance 的时间序列，剔除异常值。
+    \item 价差与成本计算：计算 DEX/CEX 实时价差，并叠加滑点、手续费、Gas 等成本。
+    \item 机会筛选与方向判定：当净价差超过阈值时，标注套利方向并记录信号强度。
+    \item 收益估算与跟踪：以成交量与时间窗口为约束，估算潜在利润并监控机会的持续时间。
+\end{enumerate}
+
+\subsection{灵活性与可扩展性}
+系统设计具有良好的灵活性，支持：
+\begin{itemize}[leftmargin=*]
+    \item 后端/模拟数据切换
+    \item 多种时间范围和粒度选择
+    \item 可配置的筛选条件
+    \item 模块化的组件设计
+\end{itemize}
+
+\section{项目总结}
+
+本项目成功实现了非原子区块链交易识别网站，提供了从数据获取、处理、存储到可视化的完整解决方案。系统架构清晰、功能完善，能够有效识别和分析不同平台间的套利机会。通过现代化的技术栈和良好的架构设计，项目具有良好的可维护性和扩展性。
+
+项目的主要成果包括：
+\begin{itemize}[leftmargin=*]
+    \item 完整的前后端分离架构
+    \item 高效的数据处理和存储方案
+    \item 丰富的可视化分析功能
+    \item 灵活的部署方案
+\end{itemize}
+
+未来可以考虑增加更多的交易对支持、更复杂的套利策略以及更高级的分析功能。
+
+\end{document}
